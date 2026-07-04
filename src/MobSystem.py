@@ -63,16 +63,23 @@ class Mob:
     def get_stat_progress_percentage(self, stat_name):
         return self.get_stat_experience(stat_name) * 100 / STAT_EXPERIENCE_TO_LEVEL
 
+    def stat_level_gain(self):
+        return 2 ** (self.rating - 1)
+
     def add_stat_experience(self, stat_name, amount):
         gained_experience = amount * self.stats["Adaptability"]
         self.stat_experience[stat_name] += gained_experience
 
         while self.stat_experience[stat_name] >= STAT_EXPERIENCE_TO_LEVEL:
             self.stat_experience[stat_name] -= STAT_EXPERIENCE_TO_LEVEL
+            stat_gain = self.stat_level_gain()
             if stat_name == "Adaptability":
-                self.stats[stat_name] = round(self.stats[stat_name] + ADAPTABILITY_LEVEL_GAIN, 1)
+                self.stats[stat_name] = round(
+                    self.stats[stat_name] + (ADAPTABILITY_LEVEL_GAIN * stat_gain),
+                    1,
+                )
             else:
-                self.stats[stat_name] += 1
+                self.stats[stat_name] += stat_gain
 
     def copy(self, rating=None):
         if rating is None:
@@ -81,7 +88,7 @@ class Mob:
         return Mob(
             self.name,
             self.mob_type,
-            self.stats.copy(),
+            {stat_name: stat_value * rating for stat_name, stat_value in self.stats.items()},
             self.stat_experience.copy(),
             rating,
         )
@@ -98,6 +105,12 @@ class MobSystem:
 
     def get_owned_mob(self, mob_index):
         return self.owned_mobs[mob_index]
+
+    def remove_owned_mob(self, mob_index):
+        mob = self.owned_mobs.pop(mob_index)
+        if mob is self.last_summoned_mob:
+            self.last_summoned_mob = None
+        return mob
 
     def add_stat_experience(self, mob_index, stat_name, amount=1):
         self.get_owned_mob(mob_index).add_stat_experience(stat_name, amount)

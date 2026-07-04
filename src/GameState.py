@@ -18,7 +18,7 @@ CONTROL_GAP = 10
 CHECKBOX_SIZE = 24
 MENU_BUTTON_HEIGHT = 34
 MOB_SPRITE_SIZE = 48
-EMBERSTONE_LIFEFORCE_TO_LEVEL = 10
+EMBERSTONE_LIFEFORCE_TO_LEVEL = 100
 BASE_SUMMON_COST = 10
 SUMMON_PREVIEW_CELL_SIZE = 80
 MOB_SCROLLBAR_WIDTH = 12
@@ -26,6 +26,7 @@ MOB_SCROLLBAR_MIN_THUMB_HEIGHT = 32
 MOB_SCROLL_WHEEL_PIXELS = 96
 STAT_PROGRESS_BAR_SIZE = (144, 24)
 DEBUG_TOGGLE_BUTTON_SIZE = 24
+SACRIFICE_COOLDOWN_SECONDS = 60
 TEXT_COLOR = (20, 20, 20)
 ESSENCE_TEXT_COLOR = (245, 240, 220)
 RATE_TEXT_COLOR = (90, 150, 210)
@@ -85,6 +86,13 @@ class GameState:
         self.summon_rating_minus_rect = pygame.Rect(0, 0, 0, 0)
         self.summon_rating_plus_rect = pygame.Rect(0, 0, 0, 0)
         self.last_summoned_preview_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_dropdown_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_option_rects = []
+        self.sacrifice_dropdown_open = False
+        self.selected_sacrifice_mob_index = None
+        self.sacrifice_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_cooldown_seconds = 0
+        self.emberstone_rect = pygame.Rect(0, 0, 0, 0)
         self.summon_rating = 1
         self.emberstone_level = 1
         self.emberstone_lifeforce = 0
@@ -285,6 +293,24 @@ class GameState:
                     return True
 
         if self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE:
+            if self.sacrifice_dropdown_open:
+                for mob_index, rect in self.sacrifice_option_rects:
+                    if rect.collidepoint(position):
+                        self.selected_sacrifice_mob_index = mob_index
+                        self.sacrifice_dropdown_open = False
+                        return True
+
+                if not self.sacrifice_dropdown_rect.collidepoint(position):
+                    self.sacrifice_dropdown_open = False
+                    return True
+
+            if self.sacrifice_dropdown_rect.collidepoint(position):
+                self.sacrifice_dropdown_open = not self.sacrifice_dropdown_open
+                return True
+
+            if self.sacrifice_button_rect.collidepoint(position):
+                return self.sacrifice_selected_mob()
+
             if self.summon_rating_minus_rect.collidepoint(position):
                 return self.decrease_summon_rating()
 
@@ -307,6 +333,13 @@ class GameState:
             self.infuse_ember_cores()
             return True
 
+        if (
+            self.active_game_window == GAME_WINDOW_EMBERSTONE
+            and self.emberstone_rect.collidepoint(position)
+        ):
+            self.gain_emberstone_click_essence()
+            return True
+
         return False
 
     def consume_display_change(self):
@@ -316,11 +349,18 @@ class GameState:
 
     def update(self, dt, tics_elapsed=0, tics_per_second=1):
         self.essence_system.update_tics(tics_elapsed, tics_per_second)
+        self.update_sacrifice_cooldown(dt)
 
         if self.confirm_resolution_open:
             self.confirm_resolution_seconds -= dt
             if self.confirm_resolution_seconds <= 0:
                 self.revert_pending_resolution()
+
+    def update_sacrifice_cooldown(self, dt):
+        if self.sacrifice_cooldown_seconds <= 0:
+            return
+
+        self.sacrifice_cooldown_seconds = max(0, self.sacrifice_cooldown_seconds - dt)
 
     def next_infuse_cost(self):
         return 2 ** self.infuse_level
@@ -330,7 +370,7 @@ class GameState:
             return False
 
         self.infuse_level += 1
-        self.essence_system.multiply_essence_rate(2)
+        self.update_essence_rate()
         return True
 
     def set_ember_cores_to_next_infuse_cost(self):
@@ -345,12 +385,22 @@ class GameState:
     def add_emberstone_lifeforce(self, amount=1):
         self.emberstone_lifeforce += amount
 
-        while self.emberstone_lifeforce >= EMBERSTONE_LIFEFORCE_TO_LEVEL:
-            self.emberstone_lifeforce -= EMBERSTONE_LIFEFORCE_TO_LEVEL
+        while self.emberstone_lifeforce >= self.next_emberstone_lifeforce_cost():
+            self.emberstone_lifeforce -= self.next_emberstone_lifeforce_cost()
             self.emberstone_level += 1
+            self.update_essence_rate()
+
+    def next_emberstone_lifeforce_cost(self):
+        return EMBERSTONE_LIFEFORCE_TO_LEVEL * (10 ** (self.emberstone_level - 1))
 
     def emberstone_lifeforce_percentage(self):
-        return self.emberstone_lifeforce * 100 / EMBERSTONE_LIFEFORCE_TO_LEVEL
+        return self.emberstone_lifeforce * 100 / self.next_emberstone_lifeforce_cost()
+
+    def emberstone_lifeforce_text(self):
+        return self.essence_system.format_number(self.emberstone_lifeforce)
+
+    def update_essence_rate(self):
+        self.essence_system.essence_rate = self.emberstone_level * 0.1 * (2 ** self.infuse_level)
 
     def increase_summon_rating(self):
         if self.summon_rating >= self.emberstone_level:
@@ -398,6 +448,62 @@ class GameState:
         self.mob_system.summon_random_mob(self.summon_rating)
         self.selected_mob_index = len(self.mob_system.get_owned_mobs()) - 1
         return True
+
+    def selected_sacrifice_mob(self):
+        owned_mobs = self.mob_system.get_owned_mobs()
+        if self.selected_sacrifice_mob_index is None:
+            return None
+
+        if self.selected_sacrifice_mob_index >= len(owned_mobs):
+            self.selected_sacrifice_mob_index = None
+            return None
+
+        return owned_mobs[self.selected_sacrifice_mob_index]
+
+    def mob_lifeforce_value(self, mob):
+        return math.sqrt(sum(mob.stats.values()))
+
+    def mob_power_text(self, mob):
+        return "Power: " + self.essence_system.format_number(sum(mob.stats.values()))
+
+    def can_sacrifice_selected_mob(self):
+        return self.selected_sacrifice_mob() is not None and self.sacrifice_cooldown_seconds <= 0
+
+    def sacrifice_selected_mob(self):
+        if not self.can_sacrifice_selected_mob():
+            return False
+
+        mob = self.selected_sacrifice_mob()
+        sacrificed_index = self.selected_sacrifice_mob_index
+        self.add_emberstone_lifeforce(self.mob_lifeforce_value(mob))
+        self.mob_system.remove_owned_mob(sacrificed_index)
+        self.after_owned_mob_removed(sacrificed_index)
+        self.sacrifice_cooldown_seconds = SACRIFICE_COOLDOWN_SECONDS
+        return True
+
+    def gain_emberstone_click_essence(self):
+        self.essence_system.increase_essence(1)
+
+    def after_owned_mob_removed(self, removed_index):
+        owned_count = len(self.mob_system.get_owned_mobs())
+
+        if owned_count <= 0:
+            self.selected_mob_index = 0
+            self.selected_sacrifice_mob_index = None
+            self.mob_pool_scroll_offset = 0
+            self.mob_pool_scroll_max = 0
+            return
+
+        if self.selected_mob_index > removed_index:
+            self.selected_mob_index -= 1
+        elif self.selected_mob_index >= owned_count:
+            self.selected_mob_index = owned_count - 1
+
+        if self.selected_sacrifice_mob_index is not None:
+            if self.selected_sacrifice_mob_index > removed_index:
+                self.selected_sacrifice_mob_index -= 1
+            elif self.selected_sacrifice_mob_index >= owned_count:
+                self.selected_sacrifice_mob_index = owned_count - 1
 
     def open_last_summoned_mob(self):
         last_summoned_mob = self.mob_system.get_last_summoned_mob()
@@ -585,6 +691,7 @@ class GameState:
             self._draw_border(inner_tiles, left_rect)
             self._draw_border(inner_tiles, right_rect)
             self.draw_summon_window(left_rect)
+            self.draw_sacrifice_window(right_rect)
             return
 
         self._draw_border(inner_tiles, window_rect)
@@ -698,6 +805,7 @@ class GameState:
         self._draw_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
         self._draw_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
         self._draw_label(mob.mob_type, (title_x, preview_cell.top + 40), RATE_TEXT_COLOR)
+        self._draw_label(self.mob_power_text(mob), (title_x, preview_cell.top + 60), LIFEFORCE_TEXT_COLOR)
 
         stats_top = preview_cell.bottom + ImageManager.TILE_SIZE
         column_width = content_rect.width // 2
@@ -710,6 +818,137 @@ class GameState:
                 stats_top + (row * line_height),
             )
             self._draw_label(stat_name + ": " + str(mob.stats[stat_name]), stat_pos, ESSENCE_TEXT_COLOR)
+
+    def draw_sacrifice_window(self, window_rect):
+        content_rect = window_rect.inflate(-ImageManager.TILE_SIZE * 2, -ImageManager.TILE_SIZE * 2)
+        self.sacrifice_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.draw_sacrifice_dropdown(content_rect)
+
+        selected_mob = self.selected_sacrifice_mob()
+        if selected_mob is None:
+            return
+
+        preview_top = self.sacrifice_dropdown_rect.bottom + ImageManager.TILE_SIZE
+        stats_bottom = self.draw_compact_mob_info(content_rect, selected_mob, preview_top)
+        button_top = stats_bottom + ImageManager.TILE_SIZE
+        button_text = self.font.render("Sacrifice", False, TEXT_COLOR)
+        button_size = self._button_size("Sacrifice", button_text)
+        self.sacrifice_button_rect = pygame.Rect((content_rect.left, button_top), button_size)
+        sacrifice_text_color = TEXT_COLOR if self.can_sacrifice_selected_mob() else GRID_LINE_COLOR
+        self._draw_button_in_rect("Sacrifice", self.sacrifice_button_rect, sacrifice_text_color)
+
+        lifeforce_gain = self.mob_lifeforce_value(selected_mob)
+        lifeforce_text = self.font.render(
+            "Lifeforce: " + self.essence_system.format_number(lifeforce_gain),
+            False,
+            LIFEFORCE_TEXT_COLOR,
+        )
+        lifeforce_rect = lifeforce_text.get_rect(
+            midleft=(self.sacrifice_button_rect.right + 16, self.sacrifice_button_rect.centery)
+        )
+        self.screen.blit(lifeforce_text, lifeforce_rect)
+
+        if self.sacrifice_cooldown_seconds > 0:
+            cooldown_text = self.font.render(
+                "Cooldown: " + str(math.ceil(self.sacrifice_cooldown_seconds)) + "s",
+                False,
+                RATE_TEXT_COLOR,
+            )
+            cooldown_rect = cooldown_text.get_rect(
+                midleft=(lifeforce_rect.right + 16, self.sacrifice_button_rect.centery)
+            )
+            self.screen.blit(cooldown_text, cooldown_rect)
+
+    def draw_sacrifice_dropdown(self, content_rect):
+        self.sacrifice_option_rects = []
+        self.sacrifice_dropdown_rect = pygame.Rect(
+            content_rect.left,
+            content_rect.top,
+            content_rect.width,
+            SUMMON_PREVIEW_CELL_SIZE,
+        )
+        self._draw_box(self.sacrifice_dropdown_rect, (10, 10, 10), GRID_LINE_COLOR)
+
+        selected_mob = self.selected_sacrifice_mob()
+        if selected_mob is None:
+            self._draw_label("Select Mob", (self.sacrifice_dropdown_rect.left + 12, self.sacrifice_dropdown_rect.top + 10), RATE_TEXT_COLOR)
+        else:
+            sprite = self.image_manager.get_mob(selected_mob.sprite_key)
+            sprite_rect = sprite.get_rect(
+                midleft=(self.sacrifice_dropdown_rect.left + 12, self.sacrifice_dropdown_rect.centery)
+            )
+            self.screen.blit(sprite, sprite_rect)
+            text_x = sprite_rect.right + 12
+            self._draw_label(selected_mob.name, (text_x, self.sacrifice_dropdown_rect.top + 8), ESSENCE_TEXT_COLOR)
+            self._draw_label(self.summon_rating_text(selected_mob.rating), (text_x, self.sacrifice_dropdown_rect.top + 28), STAR_TEXT_COLOR)
+            self._draw_label(selected_mob.mob_type, (text_x, self.sacrifice_dropdown_rect.top + 48), RATE_TEXT_COLOR)
+            self._draw_label(self.mob_power_text(selected_mob), (text_x, self.sacrifice_dropdown_rect.top + 64), LIFEFORCE_TEXT_COLOR)
+
+        arrow_points = [
+            (self.sacrifice_dropdown_rect.right - 24, self.sacrifice_dropdown_rect.centery - 5),
+            (self.sacrifice_dropdown_rect.right - 10, self.sacrifice_dropdown_rect.centery - 5),
+            (self.sacrifice_dropdown_rect.right - 17, self.sacrifice_dropdown_rect.centery + 5),
+        ]
+        pygame.draw.polygon(self.screen, ESSENCE_TEXT_COLOR, arrow_points)
+
+        if not self.sacrifice_dropdown_open:
+            return
+
+        option_height = SUMMON_PREVIEW_CELL_SIZE
+        for mob_index, mob in enumerate(self.mob_system.get_owned_mobs()):
+            option_rect = pygame.Rect(
+                self.sacrifice_dropdown_rect.left,
+                self.sacrifice_dropdown_rect.bottom + (mob_index * option_height),
+                self.sacrifice_dropdown_rect.width,
+                option_height,
+            )
+            if option_rect.top >= content_rect.bottom:
+                return
+
+            clipped_rect = option_rect.clip(content_rect)
+            self._draw_box(clipped_rect, (20, 20, 20), GRID_LINE_COLOR)
+            sprite = self.image_manager.get_mob(mob.sprite_key)
+            sprite_rect = sprite.get_rect(midleft=(option_rect.left + 12, option_rect.centery))
+            self.screen.blit(sprite, sprite_rect)
+            text_x = sprite_rect.right + 12
+            self._draw_label(mob.name, (text_x, option_rect.top + 8), ESSENCE_TEXT_COLOR)
+            self._draw_label(self.summon_rating_text(mob.rating), (text_x, option_rect.top + 28), STAR_TEXT_COLOR)
+            self._draw_label(mob.mob_type, (text_x, option_rect.top + 48), RATE_TEXT_COLOR)
+            self._draw_label(self.mob_power_text(mob), (text_x, option_rect.top + 64), LIFEFORCE_TEXT_COLOR)
+            self.sacrifice_option_rects.append((mob_index, clipped_rect))
+
+    def draw_compact_mob_info(self, content_rect, mob, top):
+        preview_cell = pygame.Rect(
+            content_rect.left,
+            top,
+            SUMMON_PREVIEW_CELL_SIZE,
+            SUMMON_PREVIEW_CELL_SIZE,
+        )
+        pygame.draw.rect(self.screen, GRID_LINE_COLOR, preview_cell, 1)
+
+        sprite = self.image_manager.get_mob(mob.sprite_key)
+        sprite_rect = sprite.get_rect(center=preview_cell.center)
+        self.screen.blit(sprite, sprite_rect)
+
+        title_x = preview_cell.right + 12
+        self._draw_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
+        self._draw_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
+        self._draw_label(mob.mob_type, (title_x, preview_cell.top + 40), RATE_TEXT_COLOR)
+        self._draw_label(self.mob_power_text(mob), (title_x, preview_cell.top + 60), LIFEFORCE_TEXT_COLOR)
+
+        stats_top = preview_cell.bottom + ImageManager.TILE_SIZE
+        column_width = content_rect.width // 2
+        line_height = 18
+        for index, stat_name in enumerate(MOB_STATS):
+            column = index % 2
+            row = index // 2
+            stat_pos = (
+                content_rect.left + (column * column_width),
+                stats_top + (row * line_height),
+            )
+            self._draw_label(stat_name + ": " + str(mob.stats[stat_name]), stat_pos, ESSENCE_TEXT_COLOR)
+
+        return stats_top + (math.ceil(len(MOB_STATS) / 2) * line_height)
 
     def draw_mob_pool(self, window_rect):
         content_rect = window_rect.inflate(-ImageManager.TILE_SIZE * 2, -ImageManager.TILE_SIZE * 2)
@@ -750,10 +989,10 @@ class GameState:
                 if not cell_rect.colliderect(self.mob_pool_view_rect):
                     continue
 
-                pygame.draw.rect(self.screen, GRID_LINE_COLOR, cell_rect, 1)
-
                 if cell_index >= len(owned_mobs):
                     continue
+
+                pygame.draw.rect(self.screen, GRID_LINE_COLOR, cell_rect, 1)
 
                 mob = owned_mobs[cell_index]
                 sprite = self.image_manager.get_mob(mob.sprite_key)
@@ -842,6 +1081,7 @@ class GameState:
         self._draw_label(mob.name, (title_x, y), ESSENCE_TEXT_COLOR)
         self._draw_label(self.summon_rating_text(mob.rating), (title_x, y + 18), STAR_TEXT_COLOR)
         self._draw_label(mob.mob_type, (title_x, y + 36), RATE_TEXT_COLOR)
+        self._draw_label(self.mob_power_text(mob), (title_x, y + 54), LIFEFORCE_TEXT_COLOR)
         y += MOB_SPRITE_SIZE + 18
 
         for stat_name in MOB_STATS:
@@ -871,6 +1111,7 @@ class GameState:
     def draw_emberstone_window(self, window_rect):
         emberstone_base = self.image_manager.get_object("emberstone_base_png")
         emberstone_rect = emberstone_base.get_rect(center=window_rect.center)
+        self.emberstone_rect = emberstone_rect.copy()
         self.draw_emberstone_lifeforce(emberstone_rect)
         self.screen.blit(emberstone_base, emberstone_rect)
         self.draw_emberstone_level(emberstone_rect)
@@ -883,9 +1124,9 @@ class GameState:
 
         lifeforce_text = (
             "Lifeforce: "
-            + str(self.emberstone_lifeforce)
+            + self.emberstone_lifeforce_text()
             + "/"
-            + str(EMBERSTONE_LIFEFORCE_TO_LEVEL)
+            + self.essence_system.format_number(self.next_emberstone_lifeforce_cost())
         )
         lifeforce_label = self.font.render(lifeforce_text, False, LIFEFORCE_TEXT_COLOR)
         lifeforce_rect = lifeforce_label.get_rect(

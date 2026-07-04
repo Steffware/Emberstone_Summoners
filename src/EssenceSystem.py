@@ -18,6 +18,12 @@ class EssenceSystem:
 
         self.essence_rate *= multiplier
 
+    def increase_essence(self, amount):
+        if amount <= 0:
+            return
+
+        self.essence += amount
+
     def has_essence(self, amount):
         return self.essence >= amount
 
