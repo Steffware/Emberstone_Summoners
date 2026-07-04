@@ -12,9 +12,12 @@ raw_border_pngs = [
 ]
 raw_button_pngs = [
     ("base_button_png", pygame.image.load(BUTTONS / "base_button.png").convert_alpha()),
+    ("base_button_highlighted_png", pygame.image.load(BUTTONS / "base_button_highlighted.png").convert_alpha()),
+    ("base_button_disabled_png", pygame.image.load(BUTTONS / "base_button_disabled.png").convert_alpha()),
     ("checkbutton_unchecked_png", pygame.image.load(BUTTONS / "checkbutton_unchecked.png").convert_alpha()),
     ("checkbutton_checked_png", pygame.image.load(BUTTONS / "checkbutton_checked.png").convert_alpha()),
     ("close_button_png", pygame.image.load(BUTTONS / "close_button.png").convert_alpha()),
+    ("close_button_highlighted_png", pygame.image.load(BUTTONS / "close_button_highlighted.png").convert_alpha()),
 ]
 raw_object_pngs = [
     ("emberstone_base_png", pygame.image.load(OBJECTS / "emberstone_base.png").convert_alpha()),
@@ -90,6 +93,8 @@ class ImageManager:
         self.mobs = {}
         self.progressbars = {}
         self.button_base = None
+        self.button_base_highlighted = None
+        self.button_base_disabled = None
 
         for name, png in raw_border_pngs:
             self.borders.append(Border(name, png))
@@ -97,6 +102,10 @@ class ImageManager:
         for name, png in raw_button_pngs:
             if name == "base_button_png":
                 self.button_base = Border(name, png)
+            elif name == "base_button_highlighted_png":
+                self.button_base_highlighted = Border(name, png)
+            elif name == "base_button_disabled_png":
+                self.button_base_disabled = Border(name, png)
             else:
                 self.buttons[name] = png
 
@@ -128,6 +137,16 @@ class ImageManager:
         if self.button_base is None:
             raise KeyError("Button base not found")
         return self.button_base
+
+    def get_button_base_highlighted(self):
+        if self.button_base_highlighted is None:
+            raise KeyError("Highlighted button base not found")
+        return self.button_base_highlighted
+
+    def get_button_base_disabled(self):
+        if self.button_base_disabled is None:
+            raise KeyError("Disabled button base not found")
+        return self.button_base_disabled
 
     def get_object(self, name):
         try:

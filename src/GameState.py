@@ -3,7 +3,7 @@ from EmberCoreSystem import EmberCoreSystem
 from EssenceSystem import EssenceSystem
 import ImageManager
 import ProgressBar
-from MobSystem import MOB_STATS, STAT_DESCRIPTIONS, MobSystem
+from MobSystem import MOB_STATS, STAT_DESCRIPTIONS, Mob, MobSystem
 import pygame
 from config import RESOLUTION_OPTIONS
 from paths import FONTS
@@ -18,9 +18,12 @@ CONTROL_GAP = 10
 CHECKBOX_SIZE = 24
 MENU_BUTTON_HEIGHT = 34
 MOB_SPRITE_SIZE = 48
+MOB_POOL_COLUMNS = 5
+MOB_POOL_REFERENCE_COLUMNS = 7
 EMBERSTONE_LIFEFORCE_TO_LEVEL = 100
 BASE_SUMMON_COST = 10
 SUMMON_PREVIEW_CELL_SIZE = 80
+SACRIFICE_DROPDOWN_ROW_HEIGHT = 96
 MOB_SCROLLBAR_WIDTH = 12
 MOB_SCROLLBAR_MIN_THUMB_HEIGHT = 32
 MOB_SCROLL_WHEEL_PIXELS = 96
@@ -32,15 +35,24 @@ ESSENCE_TEXT_COLOR = (245, 240, 220)
 RATE_TEXT_COLOR = (90, 150, 210)
 GRID_LINE_COLOR = (70, 64, 58)
 SELECTED_COLOR = (255, 255, 255)
+SCHEDULED_SACRIFICE_COLOR = (220, 40, 40)
 LIFEFORCE_TEXT_COLOR = (220, 80, 80)
 AFFORDABLE_TEXT_COLOR = (95, 220, 105)
 UNAFFORDABLE_TEXT_COLOR = (220, 80, 80)
 STAR_TEXT_COLOR = (245, 190, 65)
+POTENTIAL_COLORS = {
+    "Incompetent": (220, 40, 40),
+    "Poor": (150, 150, 150),
+    "Normal": (255, 255, 255),
+    "Good": (95, 220, 105),
+    "Exceptional": STAR_TEXT_COLOR,
+}
 RESOLUTION_CONFIRM_SECONDS = 10
-GAME_MENU_BUTTON_LABELS = ["Emberstone", "Mobs", "Summon and Sacrifice"]
+GAME_MENU_BUTTON_LABELS = ["Emberstone", "Mobs", "Summon and Sacrifice", "Adventure"]
 GAME_WINDOW_EMBERSTONE = "emberstone"
 GAME_WINDOW_MOBS = "mobs"
 GAME_WINDOW_SUMMON_AND_SACRIFICE = "summon_and_sacrifice"
+GAME_WINDOW_ADVENTURE = "adventure"
 
 class GameState:
     def __init__(self, screen, current_resolution, debug_enabled=False, tic_system=None):
@@ -89,8 +101,21 @@ class GameState:
         self.sacrifice_dropdown_rect = pygame.Rect(0, 0, 0, 0)
         self.sacrifice_option_rects = []
         self.sacrifice_dropdown_open = False
+        self.sacrifice_dropdown_list_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_dropdown_scroll_index = 0
+        self.sacrifice_dropdown_scroll_max = 0
+        self.sacrifice_dropdown_visible_count = 0
+        self.sacrifice_dropdown_scrollbar_track_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_dropdown_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+        self.dragging_sacrifice_dropdown_scrollbar = False
+        self.sacrifice_dropdown_scrollbar_drag_offset = 0
         self.selected_sacrifice_mob_index = None
         self.sacrifice_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_queue_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.auto_sacrifice_checkbox_rect = pygame.Rect(0, 0, 0, 0)
+        self.auto_sacrifice_enabled = False
+        self.sacrifice_queue = []
+        self.sacrifice_queue_cell_rects = []
         self.sacrifice_cooldown_seconds = 0
         self.emberstone_rect = pygame.Rect(0, 0, 0, 0)
         self.summon_rating = 1
@@ -100,12 +125,28 @@ class GameState:
         self.debug_overlay_toggle_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_ember_core_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_lifeforce_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_sacrifice_timer_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spawn_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_stat_exp_button_rects = []
+        self.debug_spawn_window_open = False
+        self.debug_spawn_dropdown_open = False
+        self.debug_spawn_selected_mob_index = 0
+        self.debug_spawn_rating = 1
+        self.debug_spawn_stat_inputs = {}
+        self.debug_spawn_stat_rects = {}
+        self.debug_spawn_focused_stat = None
+        self.debug_spawn_dropdown_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spawn_option_rects = []
+        self.debug_spawn_rating_minus_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spawn_rating_plus_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spawn_confirm_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spawn_close_button_rect = pygame.Rect(0, 0, 0, 0)
         self.essence_system = EssenceSystem()
         self.ember_core_system = EmberCoreSystem()
         self.mob_system = MobSystem()
         self.infuse_level = 0
         self.font = pygame.font.Font(FONTS / "PixelOperator8.ttf", 16)
+        self.reset_debug_spawn_inputs()
 
     def set_debug_framerate(self, framerate):
         self.debug_framerate = framerate
@@ -114,12 +155,21 @@ class GameState:
         if hasattr(event, "pos"):
             self.mouse_position = event.pos
 
+        if self.debug_spawn_window_open and self.handle_debug_spawn_keyboard_event(event):
+            return
+
         if event.type == pygame.MOUSEWHEEL:
+            if self.can_scroll_sacrifice_dropdown():
+                self.scroll_sacrifice_dropdown(-event.y)
+                return
             if self.can_scroll_mob_pool():
                 self.scroll_mob_pool(-event.y * MOB_SCROLL_WHEEL_PIXELS)
             return
 
         if event.type == pygame.MOUSEMOTION:
+            if self.dragging_sacrifice_dropdown_scrollbar:
+                self.drag_sacrifice_dropdown_scrollbar_to(event.pos[1])
+                return
             if self.dragging_mob_scrollbar:
                 self.drag_mob_scrollbar_to(event.pos[1])
             return
@@ -128,6 +178,10 @@ class GameState:
             return
 
         if event.type == pygame.MOUSEBUTTONUP:
+            if self.dragging_sacrifice_dropdown_scrollbar:
+                self.dragging_sacrifice_dropdown_scrollbar = False
+                return
+
             if self.dragging_mob_scrollbar:
                 self.dragging_mob_scrollbar = False
                 return
@@ -141,6 +195,9 @@ class GameState:
                     return
 
             self.handle_click(event.pos)
+            return
+
+        if self.handle_sacrifice_dropdown_scrollbar_mouse_down(event.pos):
             return
 
         if self.handle_mob_scrollbar_mouse_down(event.pos):
@@ -160,6 +217,65 @@ class GameState:
                 or self.mob_scrollbar_track_rect.collidepoint(self.mouse_position)
             )
         )
+
+    def can_scroll_sacrifice_dropdown(self):
+        return (
+            self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE
+            and self.sacrifice_dropdown_open
+            and not self.settings_open
+            and not self.confirm_resolution_open
+            and self.sacrifice_dropdown_scroll_max > 0
+            and (
+                self.sacrifice_dropdown_rect.collidepoint(self.mouse_position)
+                or self.sacrifice_dropdown_list_rect.collidepoint(self.mouse_position)
+                or self.sacrifice_dropdown_scrollbar_track_rect.collidepoint(self.mouse_position)
+            )
+        )
+
+    def scroll_sacrifice_dropdown(self, amount):
+        self.set_sacrifice_dropdown_scroll_index(self.sacrifice_dropdown_scroll_index + amount)
+
+    def set_sacrifice_dropdown_scroll_index(self, index):
+        self.sacrifice_dropdown_scroll_index = max(0, min(index, self.sacrifice_dropdown_scroll_max))
+
+    def handle_sacrifice_dropdown_scrollbar_mouse_down(self, position):
+        if (
+            self.active_game_window != GAME_WINDOW_SUMMON_AND_SACRIFICE
+            or not self.sacrifice_dropdown_open
+            or self.sacrifice_dropdown_scroll_max <= 0
+        ):
+            return False
+
+        if self.sacrifice_dropdown_scrollbar_thumb_rect.collidepoint(position):
+            self.dragging_sacrifice_dropdown_scrollbar = True
+            self.sacrifice_dropdown_scrollbar_drag_offset = (
+                position[1] - self.sacrifice_dropdown_scrollbar_thumb_rect.top
+            )
+            return True
+
+        if self.sacrifice_dropdown_scrollbar_track_rect.collidepoint(position):
+            self.dragging_sacrifice_dropdown_scrollbar = True
+            self.sacrifice_dropdown_scrollbar_drag_offset = (
+                self.sacrifice_dropdown_scrollbar_thumb_rect.height // 2
+            )
+            self.drag_sacrifice_dropdown_scrollbar_to(position[1])
+            return True
+
+        return False
+
+    def drag_sacrifice_dropdown_scrollbar_to(self, mouse_y):
+        travel = (
+            self.sacrifice_dropdown_scrollbar_track_rect.height
+            - self.sacrifice_dropdown_scrollbar_thumb_rect.height
+        )
+        if travel <= 0:
+            self.set_sacrifice_dropdown_scroll_index(0)
+            return
+
+        thumb_top = mouse_y - self.sacrifice_dropdown_scrollbar_drag_offset
+        thumb_offset = thumb_top - self.sacrifice_dropdown_scrollbar_track_rect.top
+        scroll_ratio = max(0, min(thumb_offset / travel, 1))
+        self.set_sacrifice_dropdown_scroll_index(round(self.sacrifice_dropdown_scroll_max * scroll_ratio))
 
     def handle_mob_scrollbar_mouse_down(self, position):
         if self.active_game_window != GAME_WINDOW_MOBS or self.mob_pool_scroll_max <= 0:
@@ -196,6 +312,9 @@ class GameState:
         self.set_mob_pool_scroll_offset(round(self.mob_pool_scroll_max * scroll_ratio))
 
     def handle_click(self, position):
+        if self.debug_spawn_window_open:
+            return self.handle_debug_spawn_click(position)
+
         if self.confirm_resolution_open:
             if self.confirm_yes_rect.collidepoint(position):
                 self.keep_pending_resolution()
@@ -221,6 +340,20 @@ class GameState:
                     and self.debug_lifeforce_button_rect.collidepoint(position)
                 ):
                     self.add_emberstone_lifeforce()
+                    return True
+
+                if (
+                    self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE
+                    and self.debug_sacrifice_timer_button_rect.collidepoint(position)
+                ):
+                    self.reset_sacrifice_timer()
+                    return True
+
+                if (
+                    self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE
+                    and self.debug_spawn_button_rect.collidepoint(position)
+                ):
+                    self.open_debug_spawn_window()
                     return True
 
                 if self.active_game_window == GAME_WINDOW_MOBS:
@@ -308,8 +441,19 @@ class GameState:
                 self.sacrifice_dropdown_open = not self.sacrifice_dropdown_open
                 return True
 
+            for queue_index, rect in self.sacrifice_queue_cell_rects:
+                if rect.collidepoint(position):
+                    return self.select_queued_sacrifice_mob(queue_index)
+
             if self.sacrifice_button_rect.collidepoint(position):
                 return self.sacrifice_selected_mob()
+
+            if self.sacrifice_queue_button_rect.collidepoint(position):
+                return self.toggle_selected_sacrifice_queue()
+
+            if self.auto_sacrifice_checkbox_rect.collidepoint(position):
+                self.toggle_auto_sacrifice()
+                return True
 
             if self.summon_rating_minus_rect.collidepoint(position):
                 return self.decrease_summon_rating()
@@ -330,8 +474,7 @@ class GameState:
             self.active_game_window == GAME_WINDOW_EMBERSTONE
             and self.infuse_button_rect.collidepoint(position)
         ):
-            self.infuse_ember_cores()
-            return True
+            return self.infuse_ember_cores()
 
         if (
             self.active_game_window == GAME_WINDOW_EMBERSTONE
@@ -350,6 +493,7 @@ class GameState:
     def update(self, dt, tics_elapsed=0, tics_per_second=1):
         self.essence_system.update_tics(tics_elapsed, tics_per_second)
         self.update_sacrifice_cooldown(dt)
+        self.process_auto_sacrifice_queue()
 
         if self.confirm_resolution_open:
             self.confirm_resolution_seconds -= dt
@@ -361,6 +505,10 @@ class GameState:
             return
 
         self.sacrifice_cooldown_seconds = max(0, self.sacrifice_cooldown_seconds - dt)
+
+    def reset_sacrifice_timer(self):
+        self.sacrifice_cooldown_seconds = 0
+        self.process_auto_sacrifice_queue()
 
     def next_infuse_cost(self):
         return 2 ** self.infuse_level
@@ -449,6 +597,174 @@ class GameState:
         self.selected_mob_index = len(self.mob_system.get_owned_mobs()) - 1
         return True
 
+    def reset_debug_spawn_inputs(self):
+        template = self.debug_spawn_selected_template()
+        if template is None:
+            self.debug_spawn_stat_inputs = {stat_name: "0" for stat_name in MOB_STATS}
+            return
+
+        self.debug_spawn_stat_inputs = {
+            stat_name: self.format_debug_spawn_value(template.stats[stat_name])
+            for stat_name in MOB_STATS
+        }
+
+    def debug_spawn_selected_template(self):
+        summon_pool = self.mob_system.summon_pool
+        if not summon_pool:
+            return None
+
+        if self.debug_spawn_selected_mob_index >= len(summon_pool):
+            self.debug_spawn_selected_mob_index = 0
+
+        return summon_pool[self.debug_spawn_selected_mob_index]
+
+    def format_debug_spawn_value(self, value):
+        if isinstance(value, float) and not value.is_integer():
+            return str(value)
+        return str(int(value))
+
+    def open_debug_spawn_window(self):
+        self.debug_spawn_window_open = True
+        self.debug_spawn_dropdown_open = False
+        self.debug_spawn_focused_stat = None
+        self.reset_debug_spawn_inputs()
+
+    def close_debug_spawn_window(self):
+        self.debug_spawn_window_open = False
+        self.debug_spawn_dropdown_open = False
+        self.debug_spawn_focused_stat = None
+
+    def handle_debug_spawn_keyboard_event(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            self.close_debug_spawn_window()
+            return True
+
+        if self.debug_spawn_focused_stat is None:
+            return event.type in (pygame.KEYDOWN, pygame.TEXTINPUT)
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_BACKSPACE:
+                self.debug_spawn_stat_inputs[self.debug_spawn_focused_stat] = (
+                    self.debug_spawn_stat_inputs[self.debug_spawn_focused_stat][:-1]
+                )
+                return True
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.debug_spawn_focused_stat = None
+                return True
+            if event.key == pygame.K_TAB:
+                self.focus_next_debug_spawn_stat()
+                return True
+
+            return True
+
+        if event.type == pygame.TEXTINPUT:
+            self.append_debug_spawn_input_character(event.text)
+            return True
+
+        return False
+
+    def append_debug_spawn_input_character(self, character):
+        if self.debug_spawn_focused_stat is None:
+            return
+
+        current_value = self.debug_spawn_stat_inputs[self.debug_spawn_focused_stat]
+        for typed_character in character:
+            if typed_character.isdigit():
+                current_value += typed_character
+            elif typed_character == "." and "." not in current_value:
+                current_value += typed_character
+            elif typed_character == "-" and not current_value:
+                current_value += typed_character
+
+        self.debug_spawn_stat_inputs[self.debug_spawn_focused_stat] = current_value[:8]
+
+    def focus_next_debug_spawn_stat(self):
+        if self.debug_spawn_focused_stat not in MOB_STATS:
+            self.debug_spawn_focused_stat = MOB_STATS[0]
+            return
+
+        current_index = MOB_STATS.index(self.debug_spawn_focused_stat)
+        self.debug_spawn_focused_stat = MOB_STATS[(current_index + 1) % len(MOB_STATS)]
+
+    def handle_debug_spawn_click(self, position):
+        if self.debug_spawn_close_button_rect.collidepoint(position):
+            self.close_debug_spawn_window()
+            return True
+
+        if self.debug_spawn_dropdown_open:
+            for mob_index, rect in self.debug_spawn_option_rects:
+                if rect.collidepoint(position):
+                    self.debug_spawn_selected_mob_index = mob_index
+                    self.debug_spawn_dropdown_open = False
+                    self.reset_debug_spawn_inputs()
+                    return True
+
+            if not self.debug_spawn_dropdown_rect.collidepoint(position):
+                self.debug_spawn_dropdown_open = False
+                return True
+
+        if self.debug_spawn_dropdown_rect.collidepoint(position):
+            self.debug_spawn_dropdown_open = not self.debug_spawn_dropdown_open
+            self.debug_spawn_focused_stat = None
+            return True
+
+        if self.debug_spawn_rating_minus_rect.collidepoint(position):
+            self.debug_spawn_rating = max(1, self.debug_spawn_rating - 1)
+            self.debug_spawn_focused_stat = None
+            return True
+
+        if self.debug_spawn_rating_plus_rect.collidepoint(position):
+            self.debug_spawn_rating = min(10, self.debug_spawn_rating + 1)
+            self.debug_spawn_focused_stat = None
+            return True
+
+        for stat_name, rect in self.debug_spawn_stat_rects.items():
+            if rect.collidepoint(position):
+                self.debug_spawn_focused_stat = stat_name
+                return True
+
+        if self.debug_spawn_confirm_button_rect.collidepoint(position):
+            return self.spawn_debug_mob()
+
+        self.debug_spawn_focused_stat = None
+        return True
+
+    def debug_spawn_stat_value(self, stat_name):
+        text_value = self.debug_spawn_stat_inputs.get(stat_name, "0")
+        try:
+            value = float(text_value)
+        except ValueError:
+            value = 0
+
+        value = max(0.0, value)
+        if value.is_integer():
+            return int(value)
+        return round(value, 2)
+
+    def spawn_debug_mob(self):
+        template = self.debug_spawn_selected_template()
+        if template is None:
+            return False
+
+        potential = self.mob_system.random_potential()
+        stats = Mob.scaled_spawn_stats(
+            {stat_name: self.debug_spawn_stat_value(stat_name) for stat_name in MOB_STATS},
+            self.debug_spawn_rating,
+            potential,
+        )
+        spawned_mob = Mob(
+            template.name,
+            template.mob_type,
+            stats,
+            self.mob_system.empty_stat_experience(),
+            self.debug_spawn_rating,
+            potential,
+        )
+        self.mob_system.add_owned_mob(spawned_mob)
+        self.selected_mob_index = len(self.mob_system.get_owned_mobs()) - 1
+        self.selected_sacrifice_mob_index = self.selected_mob_index
+        return True
+
     def selected_sacrifice_mob(self):
         owned_mobs = self.mob_system.get_owned_mobs()
         if self.selected_sacrifice_mob_index is None:
@@ -466,6 +782,30 @@ class GameState:
     def mob_power_text(self, mob):
         return "Power: " + self.essence_system.format_number(sum(mob.stats.values()))
 
+    def draw_mob_power_line(self, mob, position):
+        power_label = self.font.render(self.mob_power_text(mob), False, LIFEFORCE_TEXT_COLOR)
+        self.screen.blit(power_label, position)
+        if not self.is_mob_queued_for_sacrifice(mob):
+            return
+
+        status_label = self.font.render(" - Being Sacrificed...", False, SCHEDULED_SACRIFICE_COLOR)
+        self.screen.blit(status_label, (position[0] + power_label.get_width(), position[1]))
+
+    def mob_stat_experience_text(self, mob, stat_name):
+        current_experience = self.essence_system.format_number(mob.get_stat_experience(stat_name))
+        next_level_experience = self.essence_system.format_number(mob.get_stat_experience_to_level(stat_name))
+        return current_experience + "/" + next_level_experience
+
+    def mob_potential_color(self, mob):
+        return POTENTIAL_COLORS.get(mob.potential, POTENTIAL_COLORS["Normal"])
+
+    def draw_mob_type_potential(self, mob, position):
+        prefix = mob.mob_type + " - "
+        prefix_label = self.font.render(prefix, False, RATE_TEXT_COLOR)
+        self.screen.blit(prefix_label, position)
+        potential_label = self.font.render(mob.potential, False, self.mob_potential_color(mob))
+        self.screen.blit(potential_label, (position[0] + prefix_label.get_width(), position[1]))
+
     def can_sacrifice_selected_mob(self):
         return self.selected_sacrifice_mob() is not None and self.sacrifice_cooldown_seconds <= 0
 
@@ -474,15 +814,85 @@ class GameState:
             return False
 
         mob = self.selected_sacrifice_mob()
-        sacrificed_index = self.selected_sacrifice_mob_index
+        return self.sacrifice_mob(mob)
+
+    def sacrifice_mob(self, mob):
+        sacrificed_index = self.owned_mob_identity_index(mob)
+        if sacrificed_index is None or self.sacrifice_cooldown_seconds > 0:
+            return False
+
         self.add_emberstone_lifeforce(self.mob_lifeforce_value(mob))
         self.mob_system.remove_owned_mob(sacrificed_index)
+        self.remove_mob_from_sacrifice_queue(mob)
         self.after_owned_mob_removed(sacrificed_index)
         self.sacrifice_cooldown_seconds = SACRIFICE_COOLDOWN_SECONDS
         return True
 
     def gain_emberstone_click_essence(self):
         self.essence_system.increase_essence(1)
+
+    def can_toggle_selected_sacrifice_queue(self):
+        return self.selected_sacrifice_mob() is not None
+
+    def toggle_selected_sacrifice_queue(self):
+        if not self.can_toggle_selected_sacrifice_queue():
+            return False
+
+        mob = self.selected_sacrifice_mob()
+        if self.is_mob_queued_for_sacrifice(mob):
+            self.remove_mob_from_sacrifice_queue(mob)
+        else:
+            self.sacrifice_queue.append(mob)
+            self.process_auto_sacrifice_queue()
+        return True
+
+    def selected_sacrifice_queue_button_label(self):
+        mob = self.selected_sacrifice_mob()
+        if mob is not None and self.is_mob_queued_for_sacrifice(mob):
+            return "Dequeue"
+        return "Queue"
+
+    def select_queued_sacrifice_mob(self, queue_index):
+        self.sync_sacrifice_queue()
+        if queue_index >= len(self.sacrifice_queue):
+            return False
+
+        owned_index = self.owned_mob_identity_index(self.sacrifice_queue[queue_index])
+        if owned_index is None:
+            return False
+
+        self.selected_sacrifice_mob_index = owned_index
+        return True
+
+    def toggle_auto_sacrifice(self):
+        self.auto_sacrifice_enabled = not self.auto_sacrifice_enabled
+        self.process_auto_sacrifice_queue()
+
+    def process_auto_sacrifice_queue(self):
+        if not self.auto_sacrifice_enabled or self.sacrifice_cooldown_seconds > 0:
+            return False
+
+        mob = self.next_queued_sacrifice_mob()
+        if mob is None:
+            return False
+
+        return self.sacrifice_mob(mob)
+
+    def next_queued_sacrifice_mob(self):
+        self.sync_sacrifice_queue()
+        if not self.sacrifice_queue:
+            return None
+        return self.sacrifice_queue[0]
+
+    def sync_sacrifice_queue(self):
+        owned_ids = {id(mob) for mob in self.mob_system.get_owned_mobs()}
+        self.sacrifice_queue = [mob for mob in self.sacrifice_queue if id(mob) in owned_ids]
+
+    def remove_mob_from_sacrifice_queue(self, mob):
+        self.sacrifice_queue = [queued_mob for queued_mob in self.sacrifice_queue if queued_mob is not mob]
+
+    def is_mob_queued_for_sacrifice(self, mob):
+        return any(queued_mob is mob for queued_mob in self.sacrifice_queue)
 
     def after_owned_mob_removed(self, removed_index):
         owned_count = len(self.mob_system.get_owned_mobs())
@@ -527,7 +937,7 @@ class GameState:
         return None
 
     def scroll_to_mob_index(self, mob_index):
-        columns, cell_size = self.mob_grid_dimensions(self.current_mob_pool_grid_width())
+        columns, cell_size = self.mob_pool_grid_dimensions(self.current_mob_pool_grid_width())
         visible_rows = max(1, math.ceil(self.current_mob_pool_grid_height() / cell_size))
         owned_rows = math.ceil(len(self.mob_system.get_owned_mobs()) / columns)
         rows = max(visible_rows, owned_rows)
@@ -614,6 +1024,8 @@ class GameState:
 
         if self.debug_enabled:
             self.draw_debug_overlay()
+            if self.debug_spawn_window_open:
+                self.draw_debug_spawn_window()
 
     def draw_background(self):
 
@@ -654,7 +1066,12 @@ class GameState:
             MENU_BUTTON_HEIGHT,
         )
 
-        window_names = [GAME_WINDOW_EMBERSTONE, GAME_WINDOW_MOBS, GAME_WINDOW_SUMMON_AND_SACRIFICE]
+        window_names = [
+            GAME_WINDOW_EMBERSTONE,
+            GAME_WINDOW_MOBS,
+            GAME_WINDOW_SUMMON_AND_SACRIFICE,
+            GAME_WINDOW_ADVENTURE,
+        ]
         for index, label in enumerate(GAME_MENU_BUTTON_LABELS):
             if button_rect.bottom > menu_rect.bottom - tile_size:
                 return
@@ -664,7 +1081,7 @@ class GameState:
             button_rect.y += MENU_BUTTON_HEIGHT + tile_size
 
         while button_rect.bottom <= menu_rect.bottom - tile_size:
-            self._draw_button_in_rect("text", button_rect)
+            self._draw_button_in_rect("text", button_rect, disabled=True)
             button_rect.y += MENU_BUTTON_HEIGHT + tile_size
 
     def draw_active_game_window(self, menu_rect):
@@ -672,26 +1089,24 @@ class GameState:
         inner_tiles = self.image_manager.get_border("inner_boarder_png").get_tiles()
 
         if self.active_game_window == GAME_WINDOW_MOBS:
-            tile_size = ImageManager.TILE_SIZE
-            left_width = int((window_rect.width - tile_size) * 0.7)
-            right_width = window_rect.width - tile_size - left_width
-            left_rect = pygame.Rect(window_rect.left, window_rect.top, left_width, window_rect.height)
-            right_rect = pygame.Rect(left_rect.right + tile_size, window_rect.top, right_width, window_rect.height)
+            left_rect, right_rect = self.mob_window_rects(window_rect)
             self._draw_border(inner_tiles, left_rect)
             self._draw_border(inner_tiles, right_rect)
             self.draw_mobs_window(left_rect, right_rect)
             return
 
         if self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE:
-            tile_size = ImageManager.TILE_SIZE
-            left_width = (window_rect.width - tile_size) // 2
-            right_width = window_rect.width - tile_size - left_width
-            left_rect = pygame.Rect(window_rect.left, window_rect.top, left_width, window_rect.height)
-            right_rect = pygame.Rect(left_rect.right + tile_size, window_rect.top, right_width, window_rect.height)
+            left_rect, right_rect = self.split_game_window_rects(window_rect)
             self._draw_border(inner_tiles, left_rect)
             self._draw_border(inner_tiles, right_rect)
             self.draw_summon_window(left_rect)
             self.draw_sacrifice_window(right_rect)
+            return
+
+        if self.active_game_window == GAME_WINDOW_ADVENTURE:
+            left_rect, right_rect = self.split_game_window_rects(window_rect)
+            self._draw_border(inner_tiles, left_rect)
+            self._draw_border(inner_tiles, right_rect)
             return
 
         self._draw_border(inner_tiles, window_rect)
@@ -701,12 +1116,33 @@ class GameState:
         self.draw_mob_pool(left_rect)
         self.draw_selected_mob_details(right_rect)
 
+    def split_game_window_rects(self, window_rect):
+        tile_size = ImageManager.TILE_SIZE
+        left_width = (window_rect.width - tile_size) // 2
+        right_width = window_rect.width - tile_size - left_width
+        left_rect = pygame.Rect(window_rect.left, window_rect.top, left_width, window_rect.height)
+        right_rect = pygame.Rect(left_rect.right + tile_size, window_rect.top, right_width, window_rect.height)
+        return left_rect, right_rect
+
+    def mob_window_rects(self, window_rect):
+        tile_size = ImageManager.TILE_SIZE
+        available_width = window_rect.width - tile_size
+        old_left_width = int(available_width * 0.7)
+        old_content_width = max(0, old_left_width - (ImageManager.TILE_SIZE * 2))
+        cell_size = max(MOB_SPRITE_SIZE, old_content_width // MOB_POOL_REFERENCE_COLUMNS)
+        left_width = (cell_size * MOB_POOL_COLUMNS) + (ImageManager.TILE_SIZE * 2) + MOB_SCROLLBAR_WIDTH
+        min_right_width = MOB_SPRITE_SIZE + (ImageManager.TILE_SIZE * 2)
+        left_width = min(left_width, max(MOB_SPRITE_SIZE, available_width - min_right_width))
+        right_width = available_width - left_width
+        left_rect = pygame.Rect(window_rect.left, window_rect.top, left_width, window_rect.height)
+        right_rect = pygame.Rect(left_rect.right + tile_size, window_rect.top, right_width, window_rect.height)
+        return left_rect, right_rect
+
     def current_mob_pool_window_rect(self):
         menu_rect = self.current_game_menu_rect()
         window_rect = self.game_window_rect(menu_rect)
-        tile_size = ImageManager.TILE_SIZE
-        left_width = int((window_rect.width - tile_size) * 0.7)
-        return pygame.Rect(window_rect.left, window_rect.top, left_width, window_rect.height)
+        left_rect, _ = self.mob_window_rects(window_rect)
+        return left_rect
 
     def current_game_menu_rect(self):
         width, height = self.screen.get_size()
@@ -725,7 +1161,7 @@ class GameState:
         )
 
     def current_mob_pool_grid_width(self):
-        return self.current_mob_pool_content_rect().width
+        return max(0, self.current_mob_pool_content_rect().width - MOB_SCROLLBAR_WIDTH)
 
     def current_mob_pool_grid_height(self):
         return self.current_mob_pool_content_rect().height
@@ -740,7 +1176,7 @@ class GameState:
         self.screen.blit(essence_text, essence_rect)
         y = essence_rect.bottom + CONTROL_GAP
 
-        self.summon_button_rect = self._draw_button("Summon", (x, y))
+        self.summon_button_rect = self._draw_button("Summon", (x, y), disabled=not self.can_afford_summon())
         cost_color = AFFORDABLE_TEXT_COLOR if self.can_afford_summon() else UNAFFORDABLE_TEXT_COLOR
         cost_text = self.font.render(
             "Cost: " + self.essence_system.format_number(self.summon_cost()),
@@ -770,10 +1206,16 @@ class GameState:
             button_size,
         )
 
-        plus_color = TEXT_COLOR if self.summon_rating < self.emberstone_level else GRID_LINE_COLOR
-        minus_color = TEXT_COLOR if self.summon_rating > 1 else GRID_LINE_COLOR
-        self._draw_button_in_rect("+", self.summon_rating_plus_rect, plus_color)
-        self._draw_button_in_rect("-", self.summon_rating_minus_rect, minus_color)
+        self._draw_button_in_rect(
+            "+",
+            self.summon_rating_plus_rect,
+            disabled=self.summon_rating >= self.emberstone_level,
+        )
+        self._draw_button_in_rect(
+            "-",
+            self.summon_rating_minus_rect,
+            disabled=self.summon_rating <= 1,
+        )
 
         star_text = self.font.render(self.summon_rating_text(self.summon_rating), False, STAR_TEXT_COLOR)
         star_rect = star_text.get_rect(
@@ -804,8 +1246,8 @@ class GameState:
         title_x = preview_cell.right + 12
         self._draw_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
         self._draw_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
-        self._draw_label(mob.mob_type, (title_x, preview_cell.top + 40), RATE_TEXT_COLOR)
-        self._draw_label(self.mob_power_text(mob), (title_x, preview_cell.top + 60), LIFEFORCE_TEXT_COLOR)
+        self.draw_mob_type_potential(mob, (title_x, preview_cell.top + 40))
+        self.draw_mob_power_line(mob, (title_x, preview_cell.top + 60))
 
         stats_top = preview_cell.bottom + ImageManager.TILE_SIZE
         column_width = content_rect.width // 2
@@ -822,10 +1264,21 @@ class GameState:
     def draw_sacrifice_window(self, window_rect):
         content_rect = window_rect.inflate(-ImageManager.TILE_SIZE * 2, -ImageManager.TILE_SIZE * 2)
         self.sacrifice_button_rect = pygame.Rect(0, 0, 0, 0)
-        self.draw_sacrifice_dropdown(content_rect)
+        self.sacrifice_queue_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.auto_sacrifice_checkbox_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_queue_cell_rects = []
+        self.sacrifice_dropdown_rect = pygame.Rect(
+            content_rect.left,
+            content_rect.top,
+            content_rect.width,
+            SACRIFICE_DROPDOWN_ROW_HEIGHT,
+        )
 
         selected_mob = self.selected_sacrifice_mob()
-        if selected_mob is None:
+        if selected_mob is None or self.sacrifice_dropdown_open:
+            self.draw_sacrifice_dropdown(content_rect)
+            if not self.sacrifice_dropdown_open:
+                self.draw_sacrifice_queue(content_rect, self.sacrifice_dropdown_rect.bottom + ImageManager.TILE_SIZE)
             return
 
         preview_top = self.sacrifice_dropdown_rect.bottom + ImageManager.TILE_SIZE
@@ -834,8 +1287,11 @@ class GameState:
         button_text = self.font.render("Sacrifice", False, TEXT_COLOR)
         button_size = self._button_size("Sacrifice", button_text)
         self.sacrifice_button_rect = pygame.Rect((content_rect.left, button_top), button_size)
-        sacrifice_text_color = TEXT_COLOR if self.can_sacrifice_selected_mob() else GRID_LINE_COLOR
-        self._draw_button_in_rect("Sacrifice", self.sacrifice_button_rect, sacrifice_text_color)
+        self._draw_button_in_rect(
+            "Sacrifice",
+            self.sacrifice_button_rect,
+            disabled=not self.can_sacrifice_selected_mob(),
+        )
 
         lifeforce_gain = self.mob_lifeforce_value(selected_mob)
         lifeforce_text = self.font.render(
@@ -859,13 +1315,80 @@ class GameState:
             )
             self.screen.blit(cooldown_text, cooldown_rect)
 
+        queue_button_label = self.selected_sacrifice_queue_button_label()
+        self.sacrifice_queue_button_rect = self._draw_button(
+            queue_button_label,
+            (content_rect.left, self.sacrifice_button_rect.bottom + CONTROL_GAP),
+            disabled=not self.can_toggle_selected_sacrifice_queue(),
+        )
+        queue_top = self.sacrifice_queue_button_rect.bottom + ImageManager.TILE_SIZE
+        self.draw_sacrifice_queue(content_rect, queue_top)
+        self.draw_sacrifice_dropdown(content_rect)
+
+    def draw_sacrifice_queue(self, content_rect, top):
+        self.sync_sacrifice_queue()
+        if top >= content_rect.bottom:
+            return
+
+        self.auto_sacrifice_checkbox_rect = pygame.Rect(
+            content_rect.left,
+            top,
+            CHECKBOX_SIZE,
+            CHECKBOX_SIZE,
+        )
+        self._draw_checkbox(self.auto_sacrifice_checkbox_rect, self.auto_sacrifice_enabled)
+        self._draw_checkbox_label("Auto Sacrifice", self.auto_sacrifice_checkbox_rect, ESSENCE_TEXT_COLOR)
+
+        grid_top = self.auto_sacrifice_checkbox_rect.bottom + CONTROL_GAP
+        queue_grid_rect = pygame.Rect(
+            content_rect.left,
+            grid_top,
+            content_rect.width,
+            max(0, content_rect.bottom - grid_top),
+        )
+        self.draw_sacrifice_queue_grid(queue_grid_rect)
+
+    def draw_sacrifice_queue_grid(self, grid_rect):
+        if grid_rect.width <= 0 or grid_rect.height <= 0:
+            return
+
+        columns, cell_size = self.mob_grid_dimensions(grid_rect.width)
+        visible_rows = max(1, math.floor(grid_rect.height / cell_size))
+        previous_clip = self.screen.get_clip()
+        self.screen.set_clip(grid_rect)
+
+        for queue_index, mob in enumerate(self.sacrifice_queue):
+            row = queue_index // columns
+            if row >= visible_rows:
+                break
+
+            column = queue_index % columns
+            cell_left = grid_rect.left + (column * cell_size)
+            cell_width = cell_size
+            if column == columns - 1:
+                cell_width = grid_rect.right - cell_left
+
+            cell_rect = pygame.Rect(
+                cell_left,
+                grid_rect.top + (row * cell_size),
+                cell_width,
+                cell_size,
+            )
+            pygame.draw.rect(self.screen, GRID_LINE_COLOR, cell_rect, 1)
+            sprite = self.image_manager.get_mob(mob.sprite_key)
+            sprite_rect = sprite.get_rect(center=cell_rect.center)
+            self.screen.blit(sprite, sprite_rect)
+            self.sacrifice_queue_cell_rects.append((queue_index, cell_rect.clip(grid_rect)))
+
+        self.screen.set_clip(previous_clip)
+
     def draw_sacrifice_dropdown(self, content_rect):
         self.sacrifice_option_rects = []
         self.sacrifice_dropdown_rect = pygame.Rect(
             content_rect.left,
             content_rect.top,
             content_rect.width,
-            SUMMON_PREVIEW_CELL_SIZE,
+            SACRIFICE_DROPDOWN_ROW_HEIGHT,
         )
         self._draw_box(self.sacrifice_dropdown_rect, (10, 10, 10), GRID_LINE_COLOR)
 
@@ -881,8 +1404,9 @@ class GameState:
             text_x = sprite_rect.right + 12
             self._draw_label(selected_mob.name, (text_x, self.sacrifice_dropdown_rect.top + 8), ESSENCE_TEXT_COLOR)
             self._draw_label(self.summon_rating_text(selected_mob.rating), (text_x, self.sacrifice_dropdown_rect.top + 28), STAR_TEXT_COLOR)
-            self._draw_label(selected_mob.mob_type, (text_x, self.sacrifice_dropdown_rect.top + 48), RATE_TEXT_COLOR)
-            self._draw_label(self.mob_power_text(selected_mob), (text_x, self.sacrifice_dropdown_rect.top + 64), LIFEFORCE_TEXT_COLOR)
+            self.draw_mob_type_potential(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 48))
+            self.draw_mob_power_line(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 68))
+            self.draw_scheduled_sacrifice_marker(selected_mob, self.sacrifice_dropdown_rect)
 
         arrow_points = [
             (self.sacrifice_dropdown_rect.right - 24, self.sacrifice_dropdown_rect.centery - 5),
@@ -892,30 +1416,108 @@ class GameState:
         pygame.draw.polygon(self.screen, ESSENCE_TEXT_COLOR, arrow_points)
 
         if not self.sacrifice_dropdown_open:
+            self.sacrifice_dropdown_list_rect = pygame.Rect(0, 0, 0, 0)
+            self.sacrifice_dropdown_scroll_max = 0
+            self.sacrifice_dropdown_scroll_index = 0
+            self.sacrifice_dropdown_visible_count = 0
+            self.sacrifice_dropdown_scrollbar_track_rect = pygame.Rect(0, 0, 0, 0)
+            self.sacrifice_dropdown_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
             return
 
-        option_height = SUMMON_PREVIEW_CELL_SIZE
-        for mob_index, mob in enumerate(self.mob_system.get_owned_mobs()):
+        option_height = SACRIFICE_DROPDOWN_ROW_HEIGHT
+        owned_mobs = self.mob_system.get_owned_mobs()
+        visible_option_count = max(0, (content_rect.bottom - self.sacrifice_dropdown_rect.bottom) // option_height)
+        self.sacrifice_dropdown_visible_count = visible_option_count
+        self.sacrifice_dropdown_scroll_max = max(0, len(owned_mobs) - visible_option_count)
+        self.set_sacrifice_dropdown_scroll_index(self.sacrifice_dropdown_scroll_index)
+        list_height = visible_option_count * option_height
+        self.sacrifice_dropdown_list_rect = pygame.Rect(
+            self.sacrifice_dropdown_rect.left,
+            self.sacrifice_dropdown_rect.bottom,
+            self.sacrifice_dropdown_rect.width,
+            list_height,
+        )
+
+        if visible_option_count <= 0:
+            self.sacrifice_dropdown_scrollbar_track_rect = pygame.Rect(0, 0, 0, 0)
+            self.sacrifice_dropdown_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+            return
+
+        option_width = self.sacrifice_dropdown_rect.width
+        if self.sacrifice_dropdown_scroll_max > 0:
+            self.sacrifice_dropdown_scrollbar_track_rect = pygame.Rect(
+                self.sacrifice_dropdown_list_rect.right - MOB_SCROLLBAR_WIDTH,
+                self.sacrifice_dropdown_list_rect.top,
+                MOB_SCROLLBAR_WIDTH,
+                self.sacrifice_dropdown_list_rect.height,
+            )
+            option_width -= MOB_SCROLLBAR_WIDTH
+        else:
+            self.sacrifice_dropdown_scrollbar_track_rect = pygame.Rect(0, 0, 0, 0)
+            self.sacrifice_dropdown_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+
+        previous_clip = self.screen.get_clip()
+        self.screen.set_clip(self.sacrifice_dropdown_list_rect)
+
+        first_mob_index = self.sacrifice_dropdown_scroll_index
+        last_mob_index = min(len(owned_mobs), first_mob_index + visible_option_count)
+        for visible_index, mob_index in enumerate(range(first_mob_index, last_mob_index)):
+            mob = owned_mobs[mob_index]
             option_rect = pygame.Rect(
                 self.sacrifice_dropdown_rect.left,
-                self.sacrifice_dropdown_rect.bottom + (mob_index * option_height),
-                self.sacrifice_dropdown_rect.width,
+                self.sacrifice_dropdown_rect.bottom + (visible_index * option_height),
+                option_width,
                 option_height,
             )
-            if option_rect.top >= content_rect.bottom:
-                return
-
-            clipped_rect = option_rect.clip(content_rect)
-            self._draw_box(clipped_rect, (20, 20, 20), GRID_LINE_COLOR)
+            self._draw_box(option_rect, (20, 20, 20), GRID_LINE_COLOR)
             sprite = self.image_manager.get_mob(mob.sprite_key)
             sprite_rect = sprite.get_rect(midleft=(option_rect.left + 12, option_rect.centery))
             self.screen.blit(sprite, sprite_rect)
             text_x = sprite_rect.right + 12
             self._draw_label(mob.name, (text_x, option_rect.top + 8), ESSENCE_TEXT_COLOR)
             self._draw_label(self.summon_rating_text(mob.rating), (text_x, option_rect.top + 28), STAR_TEXT_COLOR)
-            self._draw_label(mob.mob_type, (text_x, option_rect.top + 48), RATE_TEXT_COLOR)
-            self._draw_label(self.mob_power_text(mob), (text_x, option_rect.top + 64), LIFEFORCE_TEXT_COLOR)
-            self.sacrifice_option_rects.append((mob_index, clipped_rect))
+            self.draw_mob_type_potential(mob, (text_x, option_rect.top + 48))
+            self.draw_mob_power_line(mob, (text_x, option_rect.top + 68))
+            self.draw_scheduled_sacrifice_marker(mob, option_rect)
+            self.sacrifice_option_rects.append((mob_index, option_rect))
+
+        self.screen.set_clip(previous_clip)
+        self.draw_sacrifice_dropdown_scrollbar(len(owned_mobs))
+
+    def draw_sacrifice_dropdown_scrollbar(self, owned_count):
+        if self.sacrifice_dropdown_scroll_max <= 0:
+            return
+
+        pygame.draw.rect(self.screen, GRID_LINE_COLOR, self.sacrifice_dropdown_scrollbar_track_rect, 1)
+        if self.sacrifice_dropdown_scrollbar_track_rect.height <= 0 or owned_count <= 0:
+            self.sacrifice_dropdown_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+            return
+
+        visible_ratio = self.sacrifice_dropdown_visible_count / owned_count
+        thumb_height = max(
+            MOB_SCROLLBAR_MIN_THUMB_HEIGHT,
+            int(self.sacrifice_dropdown_scrollbar_track_rect.height * visible_ratio),
+        )
+        thumb_height = min(thumb_height, self.sacrifice_dropdown_scrollbar_track_rect.height)
+        travel = self.sacrifice_dropdown_scrollbar_track_rect.height - thumb_height
+        thumb_y = self.sacrifice_dropdown_scrollbar_track_rect.top
+        if travel > 0:
+            thumb_y += round(travel * self.sacrifice_dropdown_scroll_index / self.sacrifice_dropdown_scroll_max)
+
+        self.sacrifice_dropdown_scrollbar_thumb_rect = pygame.Rect(
+            self.sacrifice_dropdown_scrollbar_track_rect.left,
+            thumb_y,
+            self.sacrifice_dropdown_scrollbar_track_rect.width,
+            thumb_height,
+        )
+        pygame.draw.rect(self.screen, (150, 150, 150), self.sacrifice_dropdown_scrollbar_thumb_rect)
+        pygame.draw.rect(self.screen, TEXT_COLOR, self.sacrifice_dropdown_scrollbar_thumb_rect, 1)
+
+    def draw_scheduled_sacrifice_marker(self, mob, rect):
+        if not self.is_mob_queued_for_sacrifice(mob):
+            return
+
+        pygame.draw.rect(self.screen, SCHEDULED_SACRIFICE_COLOR, rect.inflate(-2, -2), 2)
 
     def draw_compact_mob_info(self, content_rect, mob, top):
         preview_cell = pygame.Rect(
@@ -933,8 +1535,8 @@ class GameState:
         title_x = preview_cell.right + 12
         self._draw_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
         self._draw_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
-        self._draw_label(mob.mob_type, (title_x, preview_cell.top + 40), RATE_TEXT_COLOR)
-        self._draw_label(self.mob_power_text(mob), (title_x, preview_cell.top + 60), LIFEFORCE_TEXT_COLOR)
+        self.draw_mob_type_potential(mob, (title_x, preview_cell.top + 40))
+        self.draw_mob_power_line(mob, (title_x, preview_cell.top + 60))
 
         stats_top = preview_cell.bottom + ImageManager.TILE_SIZE
         column_width = content_rect.width // 2
@@ -952,7 +1554,12 @@ class GameState:
 
     def draw_mob_pool(self, window_rect):
         content_rect = window_rect.inflate(-ImageManager.TILE_SIZE * 2, -ImageManager.TILE_SIZE * 2)
-        self.mob_pool_view_rect = content_rect.copy()
+        self.mob_pool_view_rect = pygame.Rect(
+            content_rect.left,
+            content_rect.top,
+            max(0, content_rect.width - MOB_SCROLLBAR_WIDTH),
+            content_rect.height,
+        )
         self.mob_scrollbar_track_rect = pygame.Rect(
             content_rect.right - MOB_SCROLLBAR_WIDTH,
             content_rect.top,
@@ -961,7 +1568,7 @@ class GameState:
         )
         self.mob_cell_rects = []
 
-        columns, cell_size = self.mob_grid_dimensions(self.mob_pool_view_rect.width)
+        columns, cell_size = self.mob_pool_grid_dimensions(self.mob_pool_view_rect.width)
         visible_rows = max(1, math.ceil(self.mob_pool_view_rect.height / cell_size))
         owned_mobs = self.mob_system.get_owned_mobs()
         owned_rows = math.ceil(len(owned_mobs) / columns) if owned_mobs else 0
@@ -1011,6 +1618,10 @@ class GameState:
             if hover_rect is not None:
                 pygame.draw.rect(self.screen, SELECTED_COLOR, hover_rect.inflate(-2, -2), 2)
 
+        for mob_index, rect in self.mob_cell_rects:
+            if mob_index < len(owned_mobs) and self.is_mob_queued_for_sacrifice(owned_mobs[mob_index]):
+                pygame.draw.rect(self.screen, SCHEDULED_SACRIFICE_COLOR, rect.inflate(-6, -6), 2)
+
         self.screen.set_clip(previous_clip)
         self.draw_mob_pool_scrollbar()
 
@@ -1052,6 +1663,10 @@ class GameState:
 
         return max_columns, content_width // max_columns
 
+    def mob_pool_grid_dimensions(self, content_width):
+        columns = min(MOB_POOL_COLUMNS, max(1, content_width // MOB_SPRITE_SIZE))
+        return columns, max(MOB_SPRITE_SIZE, content_width // columns)
+
     def hovered_mob_index(self):
         for mob_index, rect in self.mob_cell_rects:
             if rect.collidepoint(self.mouse_position):
@@ -1080,9 +1695,13 @@ class GameState:
         title_x = x + MOB_SPRITE_SIZE + 12
         self._draw_label(mob.name, (title_x, y), ESSENCE_TEXT_COLOR)
         self._draw_label(self.summon_rating_text(mob.rating), (title_x, y + 18), STAR_TEXT_COLOR)
-        self._draw_label(mob.mob_type, (title_x, y + 36), RATE_TEXT_COLOR)
+        self.draw_mob_type_potential(mob, (title_x, y + 36))
         self._draw_label(self.mob_power_text(mob), (title_x, y + 54), LIFEFORCE_TEXT_COLOR)
-        y += MOB_SPRITE_SIZE + 18
+        if self.is_mob_queued_for_sacrifice(mob):
+            self._draw_label("Being Sacrificed...", (title_x, y + 72), SCHEDULED_SACRIFICE_COLOR)
+            y += MOB_SPRITE_SIZE + 52
+        else:
+            y += MOB_SPRITE_SIZE + 34
 
         for stat_name in MOB_STATS:
             value = mob.stats[stat_name]
@@ -1102,6 +1721,15 @@ class GameState:
                 progress_rect,
                 mob.get_stat_progress_percentage(stat_name),
             )
+            experience_text = self.font.render(
+                self.mob_stat_experience_text(mob, stat_name),
+                False,
+                ESSENCE_TEXT_COLOR,
+            )
+            experience_rect = experience_text.get_rect(
+                midleft=(progress_rect.right + 8, progress_rect.centery)
+            )
+            self.screen.blit(experience_text, experience_rect)
             y += STAT_PROGRESS_BAR_SIZE[1] + line_gap
 
     def _draw_label(self, text, position, color):
@@ -1178,7 +1806,11 @@ class GameState:
             ember_core_rect.right,
             ember_core_rect.bottom + CONTROL_GAP,
         )
-        self._draw_button_in_rect("Infuse", self.infuse_button_rect)
+        self._draw_button_in_rect(
+            "Infuse",
+            self.infuse_button_rect,
+            disabled=self.ember_core_system.get_ember_cores() < self.next_infuse_cost(),
+        )
 
     def game_window_rect(self, menu_rect):
         width, height = self.screen.get_size()
@@ -1202,6 +1834,8 @@ class GameState:
             topright=(settings_rect.right - close_margin, settings_rect.top + close_margin)
         )
         self.draw_settings_header(settings_rect)
+        if self.close_button_rect.collidepoint(self.mouse_position):
+            close_button = self.image_manager.get_button("close_button_highlighted_png")
         self.screen.blit(close_button, self.close_button_rect)
         self.draw_settings_options(settings_rect)
 
@@ -1304,9 +1938,125 @@ class GameState:
         self.confirm_yes_rect = self._draw_button("Yes", (confirm_rect.centerx - 132, button_y))
         self.confirm_no_rect = self._draw_button("No", (confirm_rect.centerx + 40, button_y))
 
+    def debug_spawn_window_rect(self):
+        width, height = self.screen.get_size()
+        window_rect = pygame.Rect(0, 0, 780, 620)
+        window_rect.center = (width // 2, height // 2)
+        return window_rect
+
+    def draw_debug_spawn_window(self):
+        window_rect = self.debug_spawn_window_rect()
+        settings_tiles = self.image_manager.get_border("settings_border_png").get_tiles()
+        self._draw_border(settings_tiles, window_rect)
+
+        close_button = self.image_manager.get_button("close_button_png")
+        self.debug_spawn_close_button_rect = close_button.get_rect(
+            topright=(window_rect.right, window_rect.top)
+        )
+        if self.debug_spawn_close_button_rect.collidepoint(self.mouse_position):
+            close_button = self.image_manager.get_button("close_button_highlighted_png")
+        self.screen.blit(close_button, self.debug_spawn_close_button_rect)
+
+        content_rect = window_rect.inflate(-SETTINGS_CONTENT_PADDING, -SETTINGS_CONTENT_PADDING)
+        title = self.font.render("Debug Spawn", False, TEXT_COLOR)
+        self.screen.blit(title, (content_rect.left, content_rect.top))
+
+        y = content_rect.top + 42
+        self.draw_debug_spawn_dropdown(content_rect.left, y, 360)
+        self.draw_debug_spawn_rating_controls(content_rect.left + 390, y)
+
+        template = self.debug_spawn_selected_template()
+        if template is not None:
+            sprite = self.image_manager.get_mob(template.sprite_key)
+            sprite_rect = sprite.get_rect(topright=(content_rect.right, y))
+            self.screen.blit(sprite, sprite_rect)
+
+        stats_top = y + 74
+        self.draw_debug_spawn_stat_inputs(content_rect, stats_top)
+        self.debug_spawn_confirm_button_rect = self._draw_button(
+            "Spawn",
+            (content_rect.left, content_rect.bottom - MENU_BUTTON_HEIGHT - 8),
+        )
+
+        if self.debug_spawn_dropdown_open:
+            self.draw_debug_spawn_dropdown_options()
+
+    def draw_debug_spawn_dropdown(self, left, top, width):
+        self.debug_spawn_dropdown_rect = pygame.Rect(left, top, width, DROPDOWN_HEIGHT)
+        self._draw_box(self.debug_spawn_dropdown_rect, (180, 180, 180), TEXT_COLOR)
+
+        template = self.debug_spawn_selected_template()
+        label = "Select Mob"
+        if template is not None:
+            label = template.name + " (" + template.mob_type + ")"
+        self._draw_dropdown_text(label, self.debug_spawn_dropdown_rect, TEXT_COLOR)
+
+        arrow_points = [
+            (self.debug_spawn_dropdown_rect.right - 22, self.debug_spawn_dropdown_rect.centery - 4),
+            (self.debug_spawn_dropdown_rect.right - 10, self.debug_spawn_dropdown_rect.centery - 4),
+            (self.debug_spawn_dropdown_rect.right - 16, self.debug_spawn_dropdown_rect.centery + 5),
+        ]
+        pygame.draw.polygon(self.screen, TEXT_COLOR, arrow_points)
+
+    def draw_debug_spawn_dropdown_options(self):
+        self.debug_spawn_option_rects = []
+        option_height = DROPDOWN_HEIGHT
+        for mob_index, mob in enumerate(self.mob_system.summon_pool):
+            option_rect = pygame.Rect(
+                self.debug_spawn_dropdown_rect.left,
+                self.debug_spawn_dropdown_rect.bottom + (mob_index * option_height),
+                self.debug_spawn_dropdown_rect.width,
+                option_height,
+            )
+            fill_color = (205, 205, 205) if mob_index == self.debug_spawn_selected_mob_index else (190, 190, 190)
+            self._draw_box(option_rect, fill_color, TEXT_COLOR)
+            self._draw_dropdown_text(mob.name + " (" + mob.mob_type + ")", option_rect, TEXT_COLOR)
+            self.debug_spawn_option_rects.append((mob_index, option_rect))
+
+    def draw_debug_spawn_rating_controls(self, left, top):
+        label = self.font.render("Stars:", False, TEXT_COLOR)
+        self.screen.blit(label, (left, top + 5))
+
+        button_size = 28
+        self.debug_spawn_rating_minus_rect = pygame.Rect(left + 80, top, button_size, button_size)
+        self.debug_spawn_rating_plus_rect = pygame.Rect(
+            self.debug_spawn_rating_minus_rect.right + 8,
+            top,
+            button_size,
+            button_size,
+        )
+        self._draw_button_in_rect("-", self.debug_spawn_rating_minus_rect, disabled=self.debug_spawn_rating <= 1)
+        self._draw_button_in_rect("+", self.debug_spawn_rating_plus_rect, disabled=self.debug_spawn_rating >= 10)
+
+        stars = self.font.render(self.summon_rating_text(self.debug_spawn_rating), False, STAR_TEXT_COLOR)
+        self.screen.blit(stars, (self.debug_spawn_rating_plus_rect.right + 12, top + 5))
+
+    def draw_debug_spawn_stat_inputs(self, content_rect, top):
+        self.debug_spawn_stat_rects = {}
+        label_width = 132
+        input_width = 96
+        input_height = 28
+        line_height = 42
+        column_width = content_rect.width // 2
+
+        for index, stat_name in enumerate(MOB_STATS):
+            column = index % 2
+            row = index // 2
+            x = content_rect.left + (column * column_width)
+            y = top + (row * line_height)
+
+            self._draw_label(stat_name, (x, y + 6), TEXT_COLOR)
+            input_rect = pygame.Rect(x + label_width, y, input_width, input_height)
+            fill_color = (215, 215, 215) if self.debug_spawn_focused_stat == stat_name else (190, 190, 190)
+            self._draw_box(input_rect, fill_color, TEXT_COLOR)
+            self._draw_text(self.debug_spawn_stat_inputs.get(stat_name, "0"), input_rect, TEXT_COLOR)
+            self.debug_spawn_stat_rects[stat_name] = input_rect
+
     def draw_debug_overlay(self):
         self.debug_ember_core_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_lifeforce_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_sacrifice_timer_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spawn_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_stat_exp_button_rects = []
 
         if self.debug_overlay_minimized:
@@ -1322,21 +2072,26 @@ class GameState:
             "fps: " + str(round(self.debug_framerate, 1)),
         ]
         rendered_lines = [self.font.render(line, False, (230, 230, 230)) for line in lines]
-        emberstone_debug_button_labels = []
+        debug_button_labels = []
         if self.active_game_window == GAME_WINDOW_EMBERSTONE:
-            emberstone_debug_button_labels = [
+            debug_button_labels = [
                 "Set Cores: " + str(self.next_infuse_cost()),
                 "Life +1",
             ]
+        elif self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE:
+            debug_button_labels = [
+                "Reset Sac",
+                "Spawn",
+            ]
 
-        emberstone_debug_button_sizes = [self._button_size(label) for label in emberstone_debug_button_labels]
-        emberstone_debug_button_width = max((size[0] for size in emberstone_debug_button_sizes), default=0)
-        emberstone_debug_button_height = max((size[1] for size in emberstone_debug_button_sizes), default=0)
-        emberstone_debug_buttons_height = 0
-        if emberstone_debug_button_labels:
-            emberstone_debug_buttons_height = (
-                len(emberstone_debug_button_labels) * emberstone_debug_button_height
-                + (len(emberstone_debug_button_labels) - 1) * CONTROL_GAP
+        debug_button_sizes = [self._button_size(label) for label in debug_button_labels]
+        debug_button_width = max((size[0] for size in debug_button_sizes), default=0)
+        debug_button_height = max((size[1] for size in debug_button_sizes), default=0)
+        debug_buttons_height = 0
+        if debug_button_labels:
+            debug_buttons_height = (
+                len(debug_button_labels) * debug_button_height
+                + (len(debug_button_labels) - 1) * CONTROL_GAP
             )
 
         stat_button_labels = []
@@ -1362,13 +2117,13 @@ class GameState:
         text_height = sum(line.get_height() for line in rendered_lines) + line_gap
         overlay_width = max(
             text_width + DEBUG_TOGGLE_BUTTON_SIZE + padding,
-            emberstone_debug_button_width,
+            debug_button_width,
             stat_buttons_width,
             DEBUG_TOGGLE_BUTTON_SIZE,
         ) + (padding * 2)
         overlay_height = text_height + (padding * 2)
-        if emberstone_debug_button_labels:
-            overlay_height += emberstone_debug_buttons_height + padding
+        if debug_button_labels:
+            overlay_height += debug_buttons_height + padding
         if stat_button_labels:
             overlay_height += stat_buttons_height + padding
         overlay = pygame.Surface((overlay_width, overlay_height), pygame.SRCALPHA)
@@ -1389,21 +2144,25 @@ class GameState:
             self.screen.blit(line, (overlay_pos[0] + padding, overlay_pos[1] + y))
             y += line.get_height() + line_gap
 
-        if emberstone_debug_button_labels:
+        if debug_button_labels:
             y += padding
-            for index, label in enumerate(emberstone_debug_button_labels):
+            for index, label in enumerate(debug_button_labels):
                 button_rect = pygame.Rect(
                     overlay_pos[0] + padding,
                     overlay_pos[1] + y,
-                    emberstone_debug_button_width,
-                    emberstone_debug_button_height,
+                    debug_button_width,
+                    debug_button_height,
                 )
                 self._draw_button_in_rect(label, button_rect)
-                if index == 0:
+                if self.active_game_window == GAME_WINDOW_EMBERSTONE and index == 0:
                     self.debug_ember_core_button_rect = button_rect
-                else:
+                elif self.active_game_window == GAME_WINDOW_EMBERSTONE and index == 1:
                     self.debug_lifeforce_button_rect = button_rect
-                y += emberstone_debug_button_height + CONTROL_GAP
+                elif self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE and index == 0:
+                    self.debug_sacrifice_timer_button_rect = button_rect
+                elif self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE and index == 1:
+                    self.debug_spawn_button_rect = button_rect
+                y += debug_button_height + CONTROL_GAP
 
         if not stat_button_labels:
             return
@@ -1430,8 +2189,8 @@ class GameState:
         )
         self._draw_button_in_rect("+", self.debug_overlay_toggle_rect)
 
-    def _draw_checkbox_label(self, text, checkbox_rect):
-        label = self.font.render(text, False, TEXT_COLOR)
+    def _draw_checkbox_label(self, text, checkbox_rect, color=TEXT_COLOR):
+        label = self.font.render(text, False, color)
         label_rect = label.get_rect(midleft=(checkbox_rect.right + 8, checkbox_rect.centery))
         self.screen.blit(label, label_rect)
 
@@ -1448,18 +2207,40 @@ class GameState:
         text_rect = rendered_text.get_rect(midleft=(rect.left + 8, rect.centery))
         self.screen.blit(rendered_text, text_rect)
 
+    def _draw_dropdown_text(self, text, rect, color):
+        text_rect = pygame.Rect(rect.left + 8, rect.top, rect.width - 38, rect.height)
+        fitted_text = self._fit_text_to_width(text, text_rect.width)
+        rendered_text = self.font.render(fitted_text, False, color)
+        rendered_rect = rendered_text.get_rect(midleft=(text_rect.left, text_rect.centery))
+        self.screen.blit(rendered_text, rendered_rect)
+
+    def _fit_text_to_width(self, text, max_width):
+        if self.font.size(text)[0] <= max_width:
+            return text
+
+        ellipsis = "..."
+        ellipsis_width = self.font.size(ellipsis)[0]
+        if ellipsis_width > max_width:
+            return ""
+
+        fitted_text = text
+        while fitted_text and self.font.size(fitted_text)[0] + ellipsis_width > max_width:
+            fitted_text = fitted_text[:-1]
+
+        return fitted_text.rstrip() + ellipsis
+
     def _draw_checkbox(self, rect, checked):
         image_name = "checkbutton_checked_png" if checked else "checkbutton_unchecked_png"
         checkbox = pygame.transform.scale(self.image_manager.get_button(image_name), rect.size)
         self.screen.blit(checkbox, rect)
 
-    def _draw_button(self, text, topleft):
-        rendered_text = self.font.render(text, False, TEXT_COLOR)
+    def _draw_button(self, text, topleft, disabled=False):
+        text_color = GRID_LINE_COLOR if disabled else TEXT_COLOR
+        rendered_text = self.font.render(text, False, text_color)
         button_width, button_height = self._button_size(text, rendered_text)
         button_rect = pygame.Rect(topleft, (button_width, button_height))
 
-        button_tiles = self.image_manager.get_button_base().get_tiles()
-        self._draw_border(button_tiles, button_rect, BUTTON_TILE_SIZE)
+        self._draw_button_frame(button_rect, disabled)
 
         text_rect = rendered_text.get_rect(center=button_rect.center)
         self.screen.blit(rendered_text, text_rect)
@@ -1474,14 +2255,29 @@ class GameState:
             max(BUTTON_TILE_SIZE * 3, rendered_text.get_height() + (BUTTON_PADDING_Y * 2)),
         )
 
-    def _draw_button_in_rect(self, text, button_rect, text_color=TEXT_COLOR):
+    def _draw_button_in_rect(self, text, button_rect, text_color=None, disabled=False):
+        if text_color is None:
+            text_color = GRID_LINE_COLOR if disabled else TEXT_COLOR
+
         rendered_text = self.font.render(text, False, text_color)
-        button_tiles = self.image_manager.get_button_base().get_tiles()
-        self._draw_border(button_tiles, button_rect, BUTTON_TILE_SIZE)
+        self._draw_button_frame(button_rect, disabled)
 
         text_rect = rendered_text.get_rect(center=button_rect.center)
         self.screen.blit(rendered_text, text_rect)
         return button_rect
+
+    def _draw_button_frame(self, button_rect, disabled=False):
+        button_base = self.button_base_for_rect(button_rect, disabled)
+        self._draw_border(button_base.get_tiles(), button_rect, BUTTON_TILE_SIZE)
+
+    def button_base_for_rect(self, button_rect, disabled=False):
+        if disabled:
+            return self.image_manager.get_button_base_disabled()
+
+        if button_rect.collidepoint(self.mouse_position):
+            return self.image_manager.get_button_base_highlighted()
+
+        return self.image_manager.get_button_base()
 
     def _draw_border(self, tiles, area, tile_size=ImageManager.TILE_SIZE):
 
