@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+
+# Local editor/project state
+.idea/
+
+# Agent/runtime mount points
+.agents/
+.codex/
+
+# Alternate Git metadata directory used while .git is a read-only mount
+.git-real/
