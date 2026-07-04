@@ -84,6 +84,7 @@ class GameState:
         self.summon_button_rect = pygame.Rect(0, 0, 0, 0)
         self.summon_rating_minus_rect = pygame.Rect(0, 0, 0, 0)
         self.summon_rating_plus_rect = pygame.Rect(0, 0, 0, 0)
+        self.last_summoned_preview_rect = pygame.Rect(0, 0, 0, 0)
         self.summon_rating = 1
         self.emberstone_level = 1
         self.emberstone_lifeforce = 0
@@ -290,6 +291,9 @@ class GameState:
             if self.summon_rating_plus_rect.collidepoint(position):
                 return self.increase_summon_rating()
 
+            if self.last_summoned_preview_rect.collidepoint(position):
+                return self.open_last_summoned_mob()
+
         if (
             self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE
             and self.summon_button_rect.collidepoint(position)
@@ -394,6 +398,42 @@ class GameState:
         self.mob_system.summon_random_mob(self.summon_rating)
         self.selected_mob_index = len(self.mob_system.get_owned_mobs()) - 1
         return True
+
+    def open_last_summoned_mob(self):
+        last_summoned_mob = self.mob_system.get_last_summoned_mob()
+        if last_summoned_mob is None:
+            return False
+
+        owned_mobs = self.mob_system.get_owned_mobs()
+        last_summoned_index = self.owned_mob_identity_index(last_summoned_mob)
+        if last_summoned_index is None:
+            return False
+
+        self.selected_mob_index = last_summoned_index
+        self.active_game_window = GAME_WINDOW_MOBS
+        self.scroll_to_mob_index(self.selected_mob_index)
+        return True
+
+    def owned_mob_identity_index(self, target_mob):
+        for index, mob in enumerate(self.mob_system.get_owned_mobs()):
+            if mob is target_mob:
+                return index
+        return None
+
+    def scroll_to_mob_index(self, mob_index):
+        columns, cell_size = self.mob_grid_dimensions(self.current_mob_pool_grid_width())
+        visible_rows = max(1, math.ceil(self.current_mob_pool_grid_height() / cell_size))
+        owned_rows = math.ceil(len(self.mob_system.get_owned_mobs()) / columns)
+        rows = max(visible_rows, owned_rows)
+        self.mob_pool_scroll_max = max(0, (rows * cell_size) - self.current_mob_pool_grid_height())
+        target_row = mob_index // columns
+        target_top = target_row * cell_size
+        target_bottom = target_top + cell_size
+
+        if target_top < self.mob_pool_scroll_offset:
+            self.set_mob_pool_scroll_offset(target_top)
+        elif target_bottom > self.mob_pool_scroll_offset + self.current_mob_pool_grid_height():
+            self.set_mob_pool_scroll_offset(target_bottom - self.current_mob_pool_grid_height())
 
     def request_display_change(self):
         self.pending_display_change = (self.current_resolution, self.fullscreen, self.windowed_fullscreen)
@@ -554,6 +594,35 @@ class GameState:
         self.draw_mob_pool(left_rect)
         self.draw_selected_mob_details(right_rect)
 
+    def current_mob_pool_window_rect(self):
+        menu_rect = self.current_game_menu_rect()
+        window_rect = self.game_window_rect(menu_rect)
+        tile_size = ImageManager.TILE_SIZE
+        left_width = int((window_rect.width - tile_size) * 0.7)
+        return pygame.Rect(window_rect.left, window_rect.top, left_width, window_rect.height)
+
+    def current_game_menu_rect(self):
+        width, height = self.screen.get_size()
+        top_gap = self.settings_button_rect.top
+        return pygame.Rect(
+            self.settings_button_rect.left,
+            self.settings_button_rect.bottom + top_gap,
+            width // 4,
+            height - self.settings_button_rect.bottom - (top_gap * 2),
+        )
+
+    def current_mob_pool_content_rect(self):
+        return self.current_mob_pool_window_rect().inflate(
+            -ImageManager.TILE_SIZE * 2,
+            -ImageManager.TILE_SIZE * 2,
+        )
+
+    def current_mob_pool_grid_width(self):
+        return self.current_mob_pool_content_rect().width
+
+    def current_mob_pool_grid_height(self):
+        return self.current_mob_pool_content_rect().height
+
     def draw_summon_window(self, window_rect):
         content_rect = window_rect.inflate(-ImageManager.TILE_SIZE * 2, -ImageManager.TILE_SIZE * 2)
         x = content_rect.left
@@ -613,12 +682,14 @@ class GameState:
             SUMMON_PREVIEW_CELL_SIZE,
         )
         pygame.draw.rect(self.screen, GRID_LINE_COLOR, preview_cell, 1)
+        self.last_summoned_preview_rect = pygame.Rect(0, 0, 0, 0)
 
         mob = self.mob_system.get_last_summoned_mob()
         if mob is None:
             self._draw_label("No summon yet", (preview_cell.right + 12, preview_cell.top), RATE_TEXT_COLOR)
             return
 
+        self.last_summoned_preview_rect = preview_cell
         sprite = self.image_manager.get_mob(mob.sprite_key)
         sprite_rect = sprite.get_rect(center=preview_cell.center)
         self.screen.blit(sprite, sprite_rect)
