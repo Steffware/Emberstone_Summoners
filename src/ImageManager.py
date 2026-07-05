@@ -2,29 +2,42 @@ import pygame
 from paths import BORDERS, BUTTONS, MOBS, OBJECTS, PROGRESSBARS
 
 # config
-TILE_SIZE = 16
+ASSET_SCALE = 2
+SOURCE_TILE_SIZE = 16
+TILE_SIZE = SOURCE_TILE_SIZE * ASSET_SCALE
+
+
+def load_scaled(path):
+    png = pygame.image.load(path).convert_alpha()
+    return pygame.transform.scale(
+        png,
+        (png.get_width() * ASSET_SCALE, png.get_height() * ASSET_SCALE),
+    )
 
 # raw images
 raw_border_pngs = [
-    ("main_border_png", pygame.image.load(BORDERS / "main_border.png").convert_alpha()),
-    ("settings_border_png", pygame.image.load(BORDERS / "settings_border.png").convert_alpha()),
-    ("inner_boarder_png", pygame.image.load(BORDERS / "inner_boarder.png").convert_alpha()),
+    ("main_border_png", load_scaled(BORDERS / "main_border.png")),
+    ("settings_border_png", load_scaled(BORDERS / "settings_border.png")),
+    ("inner_boarder_png", load_scaled(BORDERS / "inner_boarder.png")),
+    ("mob_cell_png", load_scaled(BORDERS / "mob_cell.png")),
+    ("mob_cell_highlited_png", load_scaled(BORDERS / "mob_cell_highlited.png")),
+    ("mob_cell_sacrifice_png", load_scaled(BORDERS / "mob_cell_sacrifice.png")),
 ]
 raw_button_pngs = [
-    ("base_button_png", pygame.image.load(BUTTONS / "base_button.png").convert_alpha()),
-    ("base_button_highlighted_png", pygame.image.load(BUTTONS / "base_button_highlighted.png").convert_alpha()),
-    ("base_button_disabled_png", pygame.image.load(BUTTONS / "base_button_disabled.png").convert_alpha()),
-    ("checkbutton_unchecked_png", pygame.image.load(BUTTONS / "checkbutton_unchecked.png").convert_alpha()),
-    ("checkbutton_checked_png", pygame.image.load(BUTTONS / "checkbutton_checked.png").convert_alpha()),
-    ("close_button_png", pygame.image.load(BUTTONS / "close_button.png").convert_alpha()),
-    ("close_button_highlighted_png", pygame.image.load(BUTTONS / "close_button_highlighted.png").convert_alpha()),
+    ("base_button_png", load_scaled(BUTTONS / "base_button.png")),
+    ("base_button_highlighted_png", load_scaled(BUTTONS / "base_button_highlighted.png")),
+    ("base_button_disabled_png", load_scaled(BUTTONS / "base_button_disabled.png")),
+    ("checkbutton_unchecked_png", load_scaled(BUTTONS / "checkbutton_unchecked.png")),
+    ("checkbutton_checked_png", load_scaled(BUTTONS / "checkbutton_checked.png")),
+    ("close_button_png", load_scaled(BUTTONS / "close_button.png")),
+    ("close_button_highlighted_png", load_scaled(BUTTONS / "close_button_highlighted.png")),
 ]
 raw_object_pngs = [
-    ("emberstone_base_png", pygame.image.load(OBJECTS / "emberstone_base.png").convert_alpha()),
+    ("emberstone_base_png", load_scaled(OBJECTS / "emberstone_base.png")),
 ]
 raw_progressbar_pngs = [
-    ("progressbar_empty_png", pygame.image.load(PROGRESSBARS / "progressbar_empty.png").convert_alpha()),
-    ("progressbar_fill_png", pygame.image.load(PROGRESSBARS / "progressbar_fill.png").convert_alpha()),
+    ("progressbar_empty_png", load_scaled(PROGRESSBARS / "progressbar_empty.png")),
+    ("progressbar_fill_png", load_scaled(PROGRESSBARS / "progressbar_fill.png")),
 ]
 
 
@@ -39,7 +52,7 @@ def load_mob_pngs():
 
         for mob_path in sorted(mob_type_dir.glob("*.png")):
             sprite_key = mob_type_dir.name + "/" + mob_path.stem
-            mob_pngs.append((sprite_key, pygame.image.load(mob_path).convert_alpha()))
+            mob_pngs.append((sprite_key, load_scaled(mob_path)))
 
     return mob_pngs
 
@@ -68,7 +81,7 @@ class Border:
     def cut_tiles(raw_png):
         expected_size = TILE_SIZE * 3
         if raw_png.get_width() != expected_size or raw_png.get_height() != expected_size:
-            raise ValueError("Sliced images must be 48x48 pixels")
+            raise ValueError("Sliced images must be " + str(expected_size) + "x" + str(expected_size) + " pixels")
 
         tiles = []
         for y in range(0, raw_png.get_height(), TILE_SIZE):

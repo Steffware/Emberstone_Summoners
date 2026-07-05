@@ -8,27 +8,27 @@ import pygame
 from config import RESOLUTION_OPTIONS
 from paths import FONTS
 
-BUTTON_TILE_SIZE = 8
-BUTTON_PADDING_X = 12
+BUTTON_TILE_SIZE = 16
+BUTTON_PADDING_X = 24
 BUTTON_PADDING_Y = 8
 SETTINGS_CONTENT_PADDING = 64
 DROPDOWN_WIDTH = 160
-DROPDOWN_HEIGHT = 28
+DROPDOWN_HEIGHT = 56
 CONTROL_GAP = 10
-CHECKBOX_SIZE = 24
-MENU_BUTTON_HEIGHT = 34
-MOB_SPRITE_SIZE = 48
+CHECKBOX_SIZE = 48
+MENU_BUTTON_HEIGHT = 32
+MOB_SPRITE_SIZE = 96
 MOB_POOL_COLUMNS = 5
 MOB_POOL_REFERENCE_COLUMNS = 7
 EMBERSTONE_LIFEFORCE_TO_LEVEL = 100
 BASE_SUMMON_COST = 10
-SUMMON_PREVIEW_CELL_SIZE = 80
-SACRIFICE_DROPDOWN_ROW_HEIGHT = 96
+SUMMON_PREVIEW_CELL_SIZE = 128
+SACRIFICE_DROPDOWN_ROW_HEIGHT = 128
 MOB_SCROLLBAR_WIDTH = 12
 MOB_SCROLLBAR_MIN_THUMB_HEIGHT = 32
-MOB_SCROLL_WHEEL_PIXELS = 96
+MOB_SCROLL_WHEEL_PIXELS = 160
 STAT_PROGRESS_BAR_SIZE = (144, 24)
-DEBUG_TOGGLE_BUTTON_SIZE = 24
+DEBUG_TOGGLE_BUTTON_SIZE = 48
 SACRIFICE_COOLDOWN_SECONDS = 60
 TEXT_COLOR = (20, 20, 20)
 ESSENCE_TEXT_COLOR = (245, 240, 220)
@@ -116,6 +116,13 @@ class GameState:
         self.auto_sacrifice_enabled = False
         self.sacrifice_queue = []
         self.sacrifice_queue_cell_rects = []
+        self.sacrifice_queue_grid_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_queue_scroll_offset = 0
+        self.sacrifice_queue_scroll_max = 0
+        self.sacrifice_queue_scrollbar_track_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_queue_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+        self.dragging_sacrifice_queue_scrollbar = False
+        self.sacrifice_queue_scrollbar_drag_offset = 0
         self.sacrifice_cooldown_seconds = 0
         self.emberstone_rect = pygame.Rect(0, 0, 0, 0)
         self.summon_rating = 1
@@ -162,11 +169,17 @@ class GameState:
             if self.can_scroll_sacrifice_dropdown():
                 self.scroll_sacrifice_dropdown(-event.y)
                 return
+            if self.can_scroll_sacrifice_queue():
+                self.scroll_sacrifice_queue(-event.y * MOB_SCROLL_WHEEL_PIXELS)
+                return
             if self.can_scroll_mob_pool():
                 self.scroll_mob_pool(-event.y * MOB_SCROLL_WHEEL_PIXELS)
             return
 
         if event.type == pygame.MOUSEMOTION:
+            if self.dragging_sacrifice_queue_scrollbar:
+                self.drag_sacrifice_queue_scrollbar_to(event.pos[1])
+                return
             if self.dragging_sacrifice_dropdown_scrollbar:
                 self.drag_sacrifice_dropdown_scrollbar_to(event.pos[1])
                 return
@@ -178,6 +191,10 @@ class GameState:
             return
 
         if event.type == pygame.MOUSEBUTTONUP:
+            if self.dragging_sacrifice_queue_scrollbar:
+                self.dragging_sacrifice_queue_scrollbar = False
+                return
+
             if self.dragging_sacrifice_dropdown_scrollbar:
                 self.dragging_sacrifice_dropdown_scrollbar = False
                 return
@@ -198,6 +215,9 @@ class GameState:
             return
 
         if self.handle_sacrifice_dropdown_scrollbar_mouse_down(event.pos):
+            return
+
+        if self.handle_sacrifice_queue_scrollbar_mouse_down(event.pos):
             return
 
         if self.handle_mob_scrollbar_mouse_down(event.pos):
@@ -237,6 +257,57 @@ class GameState:
 
     def set_sacrifice_dropdown_scroll_index(self, index):
         self.sacrifice_dropdown_scroll_index = max(0, min(index, self.sacrifice_dropdown_scroll_max))
+
+    def can_scroll_sacrifice_queue(self):
+        return (
+            self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE
+            and not self.sacrifice_dropdown_open
+            and not self.settings_open
+            and not self.confirm_resolution_open
+            and self.sacrifice_queue_scroll_max > 0
+            and (
+                self.sacrifice_queue_grid_rect.collidepoint(self.mouse_position)
+                or self.sacrifice_queue_scrollbar_track_rect.collidepoint(self.mouse_position)
+            )
+        )
+
+    def scroll_sacrifice_queue(self, amount):
+        self.set_sacrifice_queue_scroll_offset(self.sacrifice_queue_scroll_offset + amount)
+
+    def set_sacrifice_queue_scroll_offset(self, offset):
+        self.sacrifice_queue_scroll_offset = max(0, min(offset, self.sacrifice_queue_scroll_max))
+
+    def handle_sacrifice_queue_scrollbar_mouse_down(self, position):
+        if (
+            self.active_game_window != GAME_WINDOW_SUMMON_AND_SACRIFICE
+            or self.sacrifice_dropdown_open
+            or self.sacrifice_queue_scroll_max <= 0
+        ):
+            return False
+
+        if self.sacrifice_queue_scrollbar_thumb_rect.collidepoint(position):
+            self.dragging_sacrifice_queue_scrollbar = True
+            self.sacrifice_queue_scrollbar_drag_offset = position[1] - self.sacrifice_queue_scrollbar_thumb_rect.top
+            return True
+
+        if self.sacrifice_queue_scrollbar_track_rect.collidepoint(position):
+            self.dragging_sacrifice_queue_scrollbar = True
+            self.sacrifice_queue_scrollbar_drag_offset = self.sacrifice_queue_scrollbar_thumb_rect.height // 2
+            self.drag_sacrifice_queue_scrollbar_to(position[1])
+            return True
+
+        return False
+
+    def drag_sacrifice_queue_scrollbar_to(self, mouse_y):
+        travel = self.sacrifice_queue_scrollbar_track_rect.height - self.sacrifice_queue_scrollbar_thumb_rect.height
+        if travel <= 0:
+            self.set_sacrifice_queue_scroll_offset(0)
+            return
+
+        thumb_top = mouse_y - self.sacrifice_queue_scrollbar_drag_offset
+        thumb_offset = thumb_top - self.sacrifice_queue_scrollbar_track_rect.top
+        scroll_ratio = max(0, min(thumb_offset / travel, 1))
+        self.set_sacrifice_queue_scroll_offset(round(self.sacrifice_queue_scroll_max * scroll_ratio))
 
     def handle_sacrifice_dropdown_scrollbar_mouse_down(self, position):
         if (
@@ -782,14 +853,20 @@ class GameState:
     def mob_power_text(self, mob):
         return "Power: " + self.essence_system.format_number(sum(mob.stats.values()))
 
-    def draw_mob_power_line(self, mob, position):
+    def draw_mob_power_line(self, mob, position, status_below=False):
         power_label = self.font.render(self.mob_power_text(mob), False, LIFEFORCE_TEXT_COLOR)
         self.screen.blit(power_label, position)
         if not self.is_mob_queued_for_sacrifice(mob):
             return
 
-        status_label = self.font.render(" - Being Sacrificed...", False, SCHEDULED_SACRIFICE_COLOR)
-        self.screen.blit(status_label, (position[0] + power_label.get_width(), position[1]))
+        if status_below:
+            status_position = (position[0], position[1] + power_label.get_height())
+            status_text = "Being Sacrificed..."
+        else:
+            status_position = (position[0] + power_label.get_width(), position[1])
+            status_text = " - Being Sacrificed..."
+        status_label = self.font.render(status_text, False, SCHEDULED_SACRIFICE_COLOR)
+        self.screen.blit(status_label, status_position)
 
     def mob_stat_experience_text(self, mob, stat_name):
         current_experience = self.essence_system.format_number(mob.get_stat_experience(stat_name))
@@ -1038,12 +1115,13 @@ class GameState:
         self._draw_border(main_tiles, pygame.Rect(0, 0, width, height))
 
     def draw_settings_button(self):
-        tile_size = ImageManager.TILE_SIZE
-        self.settings_button_rect = self._draw_button("Settings", (tile_size, tile_size))
+        button_height = self._button_size("Settings")[1]
+        top_gap = button_height // 2
+        self.settings_button_rect = self._draw_button("Settings", (ImageManager.TILE_SIZE, top_gap))
 
     def draw_game_menu(self):
         width, height = self.screen.get_size()
-        top_gap = self.settings_button_rect.top
+        top_gap = self.settings_button_rect.height // 2
         menu_rect = pygame.Rect(
             self.settings_button_rect.left,
             self.settings_button_rect.bottom + top_gap,
@@ -1058,6 +1136,7 @@ class GameState:
 
     def draw_game_menu_buttons(self, menu_rect):
         tile_size = ImageManager.TILE_SIZE
+        button_gap = tile_size // 2
         self.game_menu_button_rects = []
         button_rect = pygame.Rect(
             menu_rect.left + tile_size,
@@ -1078,11 +1157,11 @@ class GameState:
 
             self._draw_button_in_rect(label, button_rect)
             self.game_menu_button_rects.append((window_names[index], button_rect.copy()))
-            button_rect.y += MENU_BUTTON_HEIGHT + tile_size
+            button_rect.y += MENU_BUTTON_HEIGHT + button_gap
 
         while button_rect.bottom <= menu_rect.bottom - tile_size:
             self._draw_button_in_rect("text", button_rect, disabled=True)
-            button_rect.y += MENU_BUTTON_HEIGHT + tile_size
+            button_rect.y += MENU_BUTTON_HEIGHT + button_gap
 
     def draw_active_game_window(self, menu_rect):
         window_rect = self.game_window_rect(menu_rect)
@@ -1146,7 +1225,7 @@ class GameState:
 
     def current_game_menu_rect(self):
         width, height = self.screen.get_size()
-        top_gap = self.settings_button_rect.top
+        top_gap = self.settings_button_rect.height // 2
         return pygame.Rect(
             self.settings_button_rect.left,
             self.settings_button_rect.bottom + top_gap,
@@ -1185,25 +1264,28 @@ class GameState:
         )
         cost_rect = cost_text.get_rect(midleft=(self.summon_button_rect.right + 16, self.summon_button_rect.centery))
         self.screen.blit(cost_text, cost_rect)
-        self.draw_summon_rating_controls(cost_rect)
 
-        preview_top = self.summon_button_rect.bottom + ImageManager.TILE_SIZE * 2
+        rating_bottom = self.draw_summon_rating_controls(
+            content_rect.left,
+            self.summon_button_rect.bottom + CONTROL_GAP,
+        )
+        preview_top = rating_bottom + CONTROL_GAP
         self.draw_last_summoned_mob_preview(content_rect, preview_top)
 
-    def draw_summon_rating_controls(self, cost_rect):
-        button_size = 24
+    def draw_summon_rating_controls(self, left, top):
+        button_size = self._button_size("+")
         button_gap = 6
         self.summon_rating_plus_rect = pygame.Rect(
-            cost_rect.right + 16,
-            self.summon_button_rect.centery - button_size // 2,
-            button_size,
-            button_size,
+            left,
+            top,
+            button_size[0],
+            button_size[1],
         )
         self.summon_rating_minus_rect = pygame.Rect(
             self.summon_rating_plus_rect.right + button_gap,
             self.summon_rating_plus_rect.top,
-            button_size,
-            button_size,
+            button_size[0],
+            button_size[1],
         )
 
         self._draw_button_in_rect(
@@ -1222,6 +1304,7 @@ class GameState:
             midleft=(self.summon_rating_minus_rect.right + 12, self.summon_rating_minus_rect.centery)
         )
         self.screen.blit(star_text, star_rect)
+        return max(self.summon_rating_minus_rect.bottom, star_rect.bottom)
 
     def draw_last_summoned_mob_preview(self, content_rect, top):
         preview_cell = pygame.Rect(
@@ -1230,7 +1313,7 @@ class GameState:
             SUMMON_PREVIEW_CELL_SIZE,
             SUMMON_PREVIEW_CELL_SIZE,
         )
-        pygame.draw.rect(self.screen, GRID_LINE_COLOR, preview_cell, 1)
+        self.draw_mob_cell_border(preview_cell)
         self.last_summoned_preview_rect = pygame.Rect(0, 0, 0, 0)
 
         mob = self.mob_system.get_last_summoned_mob()
@@ -1247,7 +1330,7 @@ class GameState:
         self._draw_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
         self._draw_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
         self.draw_mob_type_potential(mob, (title_x, preview_cell.top + 40))
-        self.draw_mob_power_line(mob, (title_x, preview_cell.top + 60))
+        self.draw_mob_power_line(mob, (title_x, preview_cell.top + 60), True)
 
         stats_top = preview_cell.bottom + ImageManager.TILE_SIZE
         column_width = content_rect.width // 2
@@ -1267,6 +1350,9 @@ class GameState:
         self.sacrifice_queue_button_rect = pygame.Rect(0, 0, 0, 0)
         self.auto_sacrifice_checkbox_rect = pygame.Rect(0, 0, 0, 0)
         self.sacrifice_queue_cell_rects = []
+        self.sacrifice_queue_grid_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_queue_scrollbar_track_rect = pygame.Rect(0, 0, 0, 0)
+        self.sacrifice_queue_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
         self.sacrifice_dropdown_rect = pygame.Rect(
             content_rect.left,
             content_rect.top,
@@ -1311,7 +1397,7 @@ class GameState:
                 RATE_TEXT_COLOR,
             )
             cooldown_rect = cooldown_text.get_rect(
-                midleft=(lifeforce_rect.right + 16, self.sacrifice_button_rect.centery)
+                topleft=(lifeforce_rect.left, lifeforce_rect.bottom + 4)
             )
             self.screen.blit(cooldown_text, cooldown_rect)
 
@@ -1328,6 +1414,9 @@ class GameState:
     def draw_sacrifice_queue(self, content_rect, top):
         self.sync_sacrifice_queue()
         if top >= content_rect.bottom:
+            self.sacrifice_queue_grid_rect = pygame.Rect(0, 0, 0, 0)
+            self.sacrifice_queue_scroll_max = 0
+            self.sacrifice_queue_scroll_offset = 0
             return
 
         self.auto_sacrifice_checkbox_rect = pygame.Rect(
@@ -1350,37 +1439,93 @@ class GameState:
 
     def draw_sacrifice_queue_grid(self, grid_rect):
         if grid_rect.width <= 0 or grid_rect.height <= 0:
+            self.sacrifice_queue_grid_rect = pygame.Rect(0, 0, 0, 0)
+            self.sacrifice_queue_scroll_max = 0
+            self.sacrifice_queue_scroll_offset = 0
             return
 
+        queue_count = len(self.sacrifice_queue)
         columns, cell_size = self.mob_grid_dimensions(grid_rect.width)
-        visible_rows = max(1, math.floor(grid_rect.height / cell_size))
+        rows = math.ceil(queue_count / columns) if queue_count else 0
+        content_height = rows * cell_size
+        self.sacrifice_queue_scroll_max = max(0, content_height - grid_rect.height)
+
+        view_rect = grid_rect.copy()
+        if self.sacrifice_queue_scroll_max > 0:
+            view_rect.width = max(0, grid_rect.width - MOB_SCROLLBAR_WIDTH)
+            columns, cell_size = self.mob_grid_dimensions(view_rect.width)
+            rows = math.ceil(queue_count / columns) if queue_count else 0
+            content_height = rows * cell_size
+            self.sacrifice_queue_scroll_max = max(0, content_height - view_rect.height)
+            self.sacrifice_queue_scrollbar_track_rect = pygame.Rect(
+                grid_rect.right - MOB_SCROLLBAR_WIDTH,
+                grid_rect.top,
+                MOB_SCROLLBAR_WIDTH,
+                grid_rect.height,
+            )
+        else:
+            self.sacrifice_queue_scrollbar_track_rect = pygame.Rect(0, 0, 0, 0)
+            self.sacrifice_queue_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+
+        self.sacrifice_queue_grid_rect = view_rect
+        self.set_sacrifice_queue_scroll_offset(self.sacrifice_queue_scroll_offset)
         previous_clip = self.screen.get_clip()
-        self.screen.set_clip(grid_rect)
+        self.screen.set_clip(view_rect)
 
         for queue_index, mob in enumerate(self.sacrifice_queue):
             row = queue_index // columns
-            if row >= visible_rows:
-                break
-
             column = queue_index % columns
-            cell_left = grid_rect.left + (column * cell_size)
+            cell_left = view_rect.left + (column * cell_size)
             cell_width = cell_size
             if column == columns - 1:
-                cell_width = grid_rect.right - cell_left
+                cell_width = view_rect.right - cell_left
 
             cell_rect = pygame.Rect(
                 cell_left,
-                grid_rect.top + (row * cell_size),
+                view_rect.top + (row * cell_size) - self.sacrifice_queue_scroll_offset,
                 cell_width,
                 cell_size,
             )
-            pygame.draw.rect(self.screen, GRID_LINE_COLOR, cell_rect, 1)
+            if not cell_rect.colliderect(view_rect):
+                continue
+
+            self.draw_mob_cell_border(cell_rect, sacrifice=True)
             sprite = self.image_manager.get_mob(mob.sprite_key)
             sprite_rect = sprite.get_rect(center=cell_rect.center)
             self.screen.blit(sprite, sprite_rect)
-            self.sacrifice_queue_cell_rects.append((queue_index, cell_rect.clip(grid_rect)))
+            self.sacrifice_queue_cell_rects.append((queue_index, cell_rect.clip(view_rect)))
 
         self.screen.set_clip(previous_clip)
+        self.draw_sacrifice_queue_scrollbar(content_height)
+
+    def draw_sacrifice_queue_scrollbar(self, content_height):
+        if self.sacrifice_queue_scroll_max <= 0:
+            return
+
+        pygame.draw.rect(self.screen, GRID_LINE_COLOR, self.sacrifice_queue_scrollbar_track_rect, 1)
+        if self.sacrifice_queue_scrollbar_track_rect.height <= 0 or content_height <= 0:
+            self.sacrifice_queue_scrollbar_thumb_rect = pygame.Rect(0, 0, 0, 0)
+            return
+
+        visible_ratio = self.sacrifice_queue_grid_rect.height / content_height
+        thumb_height = max(
+            MOB_SCROLLBAR_MIN_THUMB_HEIGHT,
+            int(self.sacrifice_queue_scrollbar_track_rect.height * visible_ratio),
+        )
+        thumb_height = min(thumb_height, self.sacrifice_queue_scrollbar_track_rect.height)
+        travel = self.sacrifice_queue_scrollbar_track_rect.height - thumb_height
+        thumb_y = self.sacrifice_queue_scrollbar_track_rect.top
+        if travel > 0:
+            thumb_y += round(travel * self.sacrifice_queue_scroll_offset / self.sacrifice_queue_scroll_max)
+
+        self.sacrifice_queue_scrollbar_thumb_rect = pygame.Rect(
+            self.sacrifice_queue_scrollbar_track_rect.left,
+            thumb_y,
+            self.sacrifice_queue_scrollbar_track_rect.width,
+            thumb_height,
+        )
+        pygame.draw.rect(self.screen, (150, 150, 150), self.sacrifice_queue_scrollbar_thumb_rect)
+        pygame.draw.rect(self.screen, TEXT_COLOR, self.sacrifice_queue_scrollbar_thumb_rect, 1)
 
     def draw_sacrifice_dropdown(self, content_rect):
         self.sacrifice_option_rects = []
@@ -1405,7 +1550,7 @@ class GameState:
             self._draw_label(selected_mob.name, (text_x, self.sacrifice_dropdown_rect.top + 8), ESSENCE_TEXT_COLOR)
             self._draw_label(self.summon_rating_text(selected_mob.rating), (text_x, self.sacrifice_dropdown_rect.top + 28), STAR_TEXT_COLOR)
             self.draw_mob_type_potential(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 48))
-            self.draw_mob_power_line(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 68))
+            self.draw_mob_power_line(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 68), True)
             self.draw_scheduled_sacrifice_marker(selected_mob, self.sacrifice_dropdown_rect)
 
         arrow_points = [
@@ -1477,7 +1622,7 @@ class GameState:
             self._draw_label(mob.name, (text_x, option_rect.top + 8), ESSENCE_TEXT_COLOR)
             self._draw_label(self.summon_rating_text(mob.rating), (text_x, option_rect.top + 28), STAR_TEXT_COLOR)
             self.draw_mob_type_potential(mob, (text_x, option_rect.top + 48))
-            self.draw_mob_power_line(mob, (text_x, option_rect.top + 68))
+            self.draw_mob_power_line(mob, (text_x, option_rect.top + 68), True)
             self.draw_scheduled_sacrifice_marker(mob, option_rect)
             self.sacrifice_option_rects.append((mob_index, option_rect))
 
@@ -1526,7 +1671,7 @@ class GameState:
             SUMMON_PREVIEW_CELL_SIZE,
             SUMMON_PREVIEW_CELL_SIZE,
         )
-        pygame.draw.rect(self.screen, GRID_LINE_COLOR, preview_cell, 1)
+        self.draw_mob_cell_border(preview_cell, sacrifice=self.is_mob_queued_for_sacrifice(mob))
 
         sprite = self.image_manager.get_mob(mob.sprite_key)
         sprite_rect = sprite.get_rect(center=preview_cell.center)
@@ -1536,7 +1681,7 @@ class GameState:
         self._draw_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
         self._draw_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
         self.draw_mob_type_potential(mob, (title_x, preview_cell.top + 40))
-        self.draw_mob_power_line(mob, (title_x, preview_cell.top + 60))
+        self.draw_mob_power_line(mob, (title_x, preview_cell.top + 60), True)
 
         stats_top = preview_cell.bottom + ImageManager.TILE_SIZE
         column_width = content_rect.width // 2
@@ -1579,6 +1724,7 @@ class GameState:
 
         previous_clip = self.screen.get_clip()
         self.screen.set_clip(self.mob_pool_view_rect)
+        hovered_index = self.hovered_mob_index()
 
         for row in range(rows):
             for column in range(columns):
@@ -1599,28 +1745,17 @@ class GameState:
                 if cell_index >= len(owned_mobs):
                     continue
 
-                pygame.draw.rect(self.screen, GRID_LINE_COLOR, cell_rect, 1)
-
                 mob = owned_mobs[cell_index]
+                highlighted = cell_index == self.selected_mob_index or cell_index == hovered_index
+                self.draw_mob_cell_border(
+                    cell_rect,
+                    highlighted,
+                    self.is_mob_queued_for_sacrifice(mob),
+                )
                 sprite = self.image_manager.get_mob(mob.sprite_key)
                 sprite_rect = sprite.get_rect(center=cell_rect.center)
                 self.screen.blit(sprite, sprite_rect)
                 self.mob_cell_rects.append((cell_index, cell_rect.clip(self.mob_pool_view_rect)))
-
-        hovered_index = self.hovered_mob_index()
-        if 0 <= self.selected_mob_index < len(owned_mobs):
-            selected_rect = self.mob_cell_rect(self.selected_mob_index)
-            if selected_rect is not None:
-                pygame.draw.rect(self.screen, SELECTED_COLOR, selected_rect.inflate(-2, -2), 2)
-
-        if hovered_index is not None and hovered_index != self.selected_mob_index:
-            hover_rect = self.mob_cell_rect(hovered_index)
-            if hover_rect is not None:
-                pygame.draw.rect(self.screen, SELECTED_COLOR, hover_rect.inflate(-2, -2), 2)
-
-        for mob_index, rect in self.mob_cell_rects:
-            if mob_index < len(owned_mobs) and self.is_mob_queued_for_sacrifice(owned_mobs[mob_index]):
-                pygame.draw.rect(self.screen, SCHEDULED_SACRIFICE_COLOR, rect.inflate(-6, -6), 2)
 
         self.screen.set_clip(previous_clip)
         self.draw_mob_pool_scrollbar()
@@ -1689,8 +1824,11 @@ class GameState:
         y = content_rect.top
         line_gap = 3
 
+        sprite_cell = pygame.Rect(x, y, MOB_SPRITE_SIZE, MOB_SPRITE_SIZE)
+        self.draw_mob_cell_border(sprite_cell, sacrifice=self.is_mob_queued_for_sacrifice(mob))
         sprite = self.image_manager.get_mob(mob.sprite_key)
-        self.screen.blit(sprite, (x, y))
+        sprite_rect = sprite.get_rect(center=sprite_cell.center)
+        self.screen.blit(sprite, sprite_rect)
 
         title_x = x + MOB_SPRITE_SIZE + 12
         self._draw_label(mob.name, (title_x, y), ESSENCE_TEXT_COLOR)
@@ -1699,9 +1837,7 @@ class GameState:
         self._draw_label(self.mob_power_text(mob), (title_x, y + 54), LIFEFORCE_TEXT_COLOR)
         if self.is_mob_queued_for_sacrifice(mob):
             self._draw_label("Being Sacrificed...", (title_x, y + 72), SCHEDULED_SACRIFICE_COLOR)
-            y += MOB_SPRITE_SIZE + 52
-        else:
-            y += MOB_SPRITE_SIZE + 34
+        y += MOB_SPRITE_SIZE + 8
 
         for stat_name in MOB_STATS:
             value = mob.stats[stat_name]
@@ -1771,8 +1907,16 @@ class GameState:
 
     def draw_emberstone_level(self, emberstone_rect):
         level_text = self.font.render(str(self.emberstone_level), False, RATE_TEXT_COLOR)
-        level_rect = level_text.get_rect(center=emberstone_rect.center)
         shadow_text = self.font.render(str(self.emberstone_level), False, TEXT_COLOR)
+        level_text = pygame.transform.scale(
+            level_text,
+            (level_text.get_width() * 2, level_text.get_height() * 2),
+        )
+        shadow_text = pygame.transform.scale(
+            shadow_text,
+            (shadow_text.get_width() * 2, shadow_text.get_height() * 2),
+        )
+        level_rect = level_text.get_rect(center=emberstone_rect.center)
         for offset in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             self.screen.blit(shadow_text, level_rect.move(offset))
         self.screen.blit(level_text, level_rect)
@@ -1790,7 +1934,7 @@ class GameState:
         self.screen.blit(rate_text, rate_rect)
 
     def draw_ember_core_controls(self, window_rect):
-        text_margin = ImageManager.TILE_SIZE * 2
+        text_margin = ImageManager.TILE_SIZE
         ember_core_text = self.font.render(
             "Ember Cores: " + str(self.ember_core_system.get_ember_cores()),
             False,
@@ -1801,7 +1945,7 @@ class GameState:
         )
         self.screen.blit(ember_core_text, ember_core_rect)
 
-        self.infuse_button_rect = pygame.Rect(0, 0, 96, MENU_BUTTON_HEIGHT)
+        self.infuse_button_rect = pygame.Rect(0, 0, 128, MENU_BUTTON_HEIGHT)
         self.infuse_button_rect.topright = (
             ember_core_rect.right,
             ember_core_rect.bottom + CONTROL_GAP,
@@ -2017,7 +2161,7 @@ class GameState:
         label = self.font.render("Stars:", False, TEXT_COLOR)
         self.screen.blit(label, (left, top + 5))
 
-        button_size = 28
+        button_size = 48
         self.debug_spawn_rating_minus_rect = pygame.Rect(left + 80, top, button_size, button_size)
         self.debug_spawn_rating_plus_rect = pygame.Rect(
             self.debug_spawn_rating_minus_rect.right + 8,
@@ -2251,8 +2395,8 @@ class GameState:
             rendered_text = self.font.render(text, False, TEXT_COLOR)
 
         return (
-            max(BUTTON_TILE_SIZE * 3, rendered_text.get_width() + (BUTTON_PADDING_X * 2)),
-            max(BUTTON_TILE_SIZE * 3, rendered_text.get_height() + (BUTTON_PADDING_Y * 2)),
+            max(BUTTON_TILE_SIZE * 2, rendered_text.get_width() + (BUTTON_PADDING_X * 2)),
+            max(BUTTON_TILE_SIZE * 2, rendered_text.get_height() + (BUTTON_PADDING_Y * 2)),
         )
 
     def _draw_button_in_rect(self, text, button_rect, text_color=None, disabled=False):
@@ -2278,6 +2422,15 @@ class GameState:
             return self.image_manager.get_button_base_highlighted()
 
         return self.image_manager.get_button_base()
+
+    def draw_mob_cell_border(self, rect, highlighted=False, sacrifice=False):
+        if sacrifice:
+            border_name = "mob_cell_sacrifice_png"
+        elif highlighted:
+            border_name = "mob_cell_highlited_png"
+        else:
+            border_name = "mob_cell_png"
+        self._draw_border(self.image_manager.get_border(border_name).get_tiles(), rect)
 
     def _draw_border(self, tiles, area, tile_size=ImageManager.TILE_SIZE):
 
