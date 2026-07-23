@@ -828,8 +828,7 @@ class GameState:
         return "Power: " + self.essence_system.format_number(mob.power)
 
     def draw_mob_power_line(self, mob, position, status_below=False):
-        power_label = self.font.render(self.mob_power_text(mob), False, LIFEFORCE_TEXT_COLOR)
-        self.screen.blit(power_label, position)
+        power_label = self._draw_outlined_label(self.mob_power_text(mob), position, LIFEFORCE_TEXT_COLOR)
         if not self.is_mob_queued_for_sacrifice(mob):
             return
 
@@ -839,8 +838,7 @@ class GameState:
         else:
             status_position = (position[0] + power_label.get_width(), position[1])
             status_text = " - Being Sacrificed..."
-        status_label = self.font.render(status_text, False, SCHEDULED_SACRIFICE_COLOR)
-        self.screen.blit(status_label, status_position)
+        self._draw_outlined_label(status_text, status_position, SCHEDULED_SACRIFICE_COLOR)
 
     def mob_power_experience_text(self, mob):
         current_experience = self.essence_system.format_number(mob.get_power_experience())
@@ -876,29 +874,25 @@ class GameState:
         return str(multiplier)
 
     def draw_mob_type(self, mob, position):
-        self._draw_label(mob.mob_type, position, RATE_TEXT_COLOR)
+        self._draw_outlined_label(mob.mob_type, position, RATE_TEXT_COLOR)
 
     def draw_mob_potential_line(self, mob, position):
         prefix = "Potential: "
-        prefix_label = self.font.render(prefix, False, RATE_TEXT_COLOR)
-        self.screen.blit(prefix_label, position)
-        potential_label = self.font.render(
+        prefix_label = self._draw_outlined_label(prefix, position, RATE_TEXT_COLOR)
+        self._draw_outlined_label(
             self.mob_potential_text(mob),
-            False,
+            (position[0] + prefix_label.get_width(), position[1]),
             self.mob_potential_color(mob),
         )
-        self.screen.blit(potential_label, (position[0] + prefix_label.get_width(), position[1]))
 
     def draw_mob_spirit_line(self, mob, position):
         prefix = "Spirit: "
-        prefix_label = self.font.render(prefix, False, RATE_TEXT_COLOR)
-        self.screen.blit(prefix_label, position)
-        spirit_label = self.font.render(
+        prefix_label = self._draw_outlined_label(prefix, position, RATE_TEXT_COLOR)
+        self._draw_outlined_label(
             mob.spirit_type + "(" + self.multiplier_text(mob.spirit_multiplier) + ")",
-            False,
+            (position[0] + prefix_label.get_width(), position[1]),
             self.mob_spirit_color(mob),
         )
-        self.screen.blit(spirit_label, (position[0] + prefix_label.get_width(), position[1]))
 
     def can_sacrifice_selected_mob(self):
         return self.selected_sacrifice_mob() is not None and self.sacrifice_cooldown_seconds <= 0
@@ -1538,7 +1532,11 @@ class GameState:
 
         selected_mob = self.selected_sacrifice_mob()
         if selected_mob is None:
-            self._draw_label("Select Mob", (self.sacrifice_dropdown_rect.left + 12, self.sacrifice_dropdown_rect.top + 10), RATE_TEXT_COLOR)
+            self._draw_outlined_label(
+                "Select Mob",
+                (self.sacrifice_dropdown_rect.left + 12, self.sacrifice_dropdown_rect.top + 10),
+                RATE_TEXT_COLOR,
+            )
         else:
             sprite = self.image_manager.get_mob(selected_mob.sprite_key)
             sprite_rect = sprite.get_rect(
@@ -1546,8 +1544,12 @@ class GameState:
             )
             self.screen.blit(sprite, sprite_rect)
             text_x = sprite_rect.right + 12
-            self._draw_label(selected_mob.name, (text_x, self.sacrifice_dropdown_rect.top + 8), ESSENCE_TEXT_COLOR)
-            self._draw_label(self.summon_rating_text(selected_mob.rating), (text_x, self.sacrifice_dropdown_rect.top + 28), STAR_TEXT_COLOR)
+            self._draw_outlined_label(selected_mob.name, (text_x, self.sacrifice_dropdown_rect.top + 8), ESSENCE_TEXT_COLOR)
+            self._draw_outlined_label(
+                self.summon_rating_text(selected_mob.rating),
+                (text_x, self.sacrifice_dropdown_rect.top + 28),
+                STAR_TEXT_COLOR,
+            )
             self.draw_mob_type(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 48))
             self.draw_mob_power_line(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 68), True)
             self.draw_scheduled_sacrifice_marker(selected_mob, self.sacrifice_dropdown_rect)
@@ -1618,8 +1620,12 @@ class GameState:
             sprite_rect = sprite.get_rect(midleft=(option_rect.left + 12, option_rect.centery))
             self.screen.blit(sprite, sprite_rect)
             text_x = sprite_rect.right + 12
-            self._draw_label(mob.name, (text_x, option_rect.top + 8), ESSENCE_TEXT_COLOR)
-            self._draw_label(self.summon_rating_text(mob.rating), (text_x, option_rect.top + 28), STAR_TEXT_COLOR)
+            self._draw_outlined_label(mob.name, (text_x, option_rect.top + 8), ESSENCE_TEXT_COLOR)
+            self._draw_outlined_label(
+                self.summon_rating_text(mob.rating),
+                (text_x, option_rect.top + 28),
+                STAR_TEXT_COLOR,
+            )
             self.draw_mob_type(mob, (text_x, option_rect.top + 48))
             self.draw_mob_power_line(mob, (text_x, option_rect.top + 68), True)
             self.draw_scheduled_sacrifice_marker(mob, option_rect)
@@ -1684,8 +1690,8 @@ class GameState:
         self.screen.blit(sprite, sprite_rect)
 
         title_x = preview_cell.right + MOB_INFO_BORDER_PADDING
-        self._draw_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
-        self._draw_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
+        self._draw_outlined_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
+        self._draw_outlined_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
         self.draw_mob_type(mob, (title_x, preview_cell.top + 40))
         self.draw_mob_power_line(mob, (title_x, preview_cell.top + 60), True)
 
@@ -1850,10 +1856,10 @@ class GameState:
         self.screen.blit(sprite, sprite_rect)
 
         title_x = content_sprite_cell.right + MOB_INFO_BORDER_PADDING
-        self._draw_label(mob.name, (title_x, y), ESSENCE_TEXT_COLOR)
-        self._draw_label(self.summon_rating_text(mob.rating), (title_x, y + line_step), STAR_TEXT_COLOR)
+        self._draw_outlined_label(mob.name, (title_x, y), ESSENCE_TEXT_COLOR)
+        self._draw_outlined_label(self.summon_rating_text(mob.rating), (title_x, y + line_step), STAR_TEXT_COLOR)
         self.draw_mob_type(mob, (title_x, y + (line_step * 2)))
-        self._draw_label(self.mob_power_text(mob), (title_x, power_y), LIFEFORCE_TEXT_COLOR)
+        self._draw_outlined_label(self.mob_power_text(mob), (title_x, power_y), LIFEFORCE_TEXT_COLOR)
 
         progress_rect = self.draw_mob_detail_progress_bar(
             title_x,
@@ -1863,7 +1869,7 @@ class GameState:
         )
         if self.is_mob_queued_for_sacrifice(mob):
             sacrifice_status_position = (title_x, progress_rect.bottom + 4)
-            self._draw_label("Being Sacrificed...", sacrifice_status_position, SCHEDULED_SACRIFICE_COLOR)
+            self._draw_outlined_label("Being Sacrificed...", sacrifice_status_position, SCHEDULED_SACRIFICE_COLOR)
 
         y = header_bottom + line_height
         spirit_y = y + (line_height * 2)
@@ -1900,7 +1906,7 @@ class GameState:
         indent_rect = indent_label.get_rect(
             midleft=(left, top + (POWER_PROGRESS_BAR_SIZE[1] // 2))
         )
-        self.screen.blit(indent_label, indent_rect)
+        self._draw_outlined_label("┗", indent_rect.topleft, RATE_TEXT_COLOR)
 
         progress_rect = pygame.Rect(
             indent_rect.right + 6,
@@ -1914,20 +1920,35 @@ class GameState:
             progress_rect,
             percentage,
         )
-        rendered_experience_text = self.font.render(
-            experience_text,
-            False,
-            ESSENCE_TEXT_COLOR,
-        )
+        rendered_experience_text = self.font.render(experience_text, False, ESSENCE_TEXT_COLOR)
         experience_rect = rendered_experience_text.get_rect(
             midleft=(progress_rect.right + 8, progress_rect.centery)
         )
-        self.screen.blit(rendered_experience_text, experience_rect)
+        self._draw_outlined_label(experience_text, experience_rect.topleft, ESSENCE_TEXT_COLOR)
         return progress_rect
 
     def _draw_label(self, text, position, color):
         label = self.font.render(text, False, color)
         self.screen.blit(label, position)
+        return label
+
+    def _draw_outlined_label(self, text, position, color, outline_color=(0, 0, 0)):
+        label = self.font.render(text, False, color)
+        outline = self.font.render(text, False, outline_color)
+        x, y = position
+        for offset_x, offset_y in (
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ):
+            self.screen.blit(outline, (x + offset_x, y + offset_y))
+        self.screen.blit(label, position)
+        return label
 
     def draw_emberstone_window(self, window_rect):
         emberstone_base = self.image_manager.get_object("emberstone_base_png")
