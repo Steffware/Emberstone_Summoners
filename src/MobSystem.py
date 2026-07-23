@@ -1,11 +1,13 @@
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
-STAT_BASE_EXPERIENCE_TO_LEVEL = 10
-STAT_EXPERIENCE_COST_MULTIPLIER = 1.1
-ADAPTABILITY_LEVEL_GAIN = 0.1
+POWER_BASE = 100
+POWER_BASE_EXPERIENCE_TO_LEVEL = 10
+POWER_EXPERIENCE_COST_MULTIPLIER = 1.1
+SPIRIT_BASE_LEVEL = 1
+SPIRIT_BASE_MULTIPLIER = 1
 
 POTENTIAL_MULTIPLIERS = {
     "Incompetent": 0.8,
@@ -15,6 +17,14 @@ POTENTIAL_MULTIPLIERS = {
     "Exceptional": 1.2,
 }
 POTENTIAL_LEVELS = list(POTENTIAL_MULTIPLIERS.keys())
+
+SPIRIT_MULTIPLIER_GAINS = {
+    "Mundane": 0.01,
+    "Enchanted": 0.03,
+    "Arcane": 0.05,
+    "Mystic": 1.1,
+}
+SPIRIT_TYPES = list(SPIRIT_MULTIPLIER_GAINS.keys())
 
 MOB_TYPES = [
     "Insect",
@@ -30,91 +40,90 @@ MOB_TYPES = [
     "Armadillo",
 ]
 
-MOB_STATS = [
-    "Vitality",
-    "Ferocity",
-    "Agility",
-    "Intuition",
-    "Precision",
-    "Brutality",
-    "Resilience",
-    "Arcane",
-    "Warding",
-    "Adaptability",
-]
-
-STAT_DESCRIPTIONS = {
-    "Vitality": "Livepoints",
-    "Ferocity": "Critical hit chance",
-    "Agility": "Ticks until attack",
-    "Intuition": "Evade chance",
-    "Precision": "Hit chance",
-    "Brutality": "Hit damage",
-    "Resilience": "Damage reduction",
-    "Arcane": "Magic damage",
-    "Warding": "Magic reduction",
-    "Adaptability": "Exp. gain Multi.",
-}
-
 
 @dataclass
 class Mob:
     name: str
     mob_type: str
-    stats: dict
-    stat_experience: dict
     rating: int = 1
     potential: str = "Normal"
-    stat_levels: dict = field(default_factory=dict)
+    base_power: int = POWER_BASE
+    power_experience: float = 0
+    power_level: int = 0
+    spirit_type: str = "Mundane"
+    spirit_multiplier: float = SPIRIT_BASE_MULTIPLIER
+    spirit_experience: float = 0
+    spirit_level: int = SPIRIT_BASE_LEVEL
 
     def __post_init__(self):
-        for stat_name in MOB_STATS:
-            self.stat_experience.setdefault(stat_name, 0)
-            self.stat_levels.setdefault(stat_name, 0)
         if self.potential not in POTENTIAL_MULTIPLIERS:
             self.potential = "Normal"
+        if self.spirit_type not in SPIRIT_MULTIPLIER_GAINS:
+            self.spirit_type = "Mundane"
 
     @property
     def sprite_key(self):
         return self.mob_type.lower() + "/" + self.name
 
-    def get_stat_experience(self, stat_name):
-        return self.stat_experience[stat_name]
-
-    def get_stat_experience_to_level(self, stat_name):
-        return self.stat_experience_to_level(self.stat_levels[stat_name])
-
-    @staticmethod
-    def stat_experience_to_level(stat_level):
-        experience_to_level = STAT_BASE_EXPERIENCE_TO_LEVEL
-        for _ in range(stat_level):
-            experience_to_level = math.ceil(experience_to_level * STAT_EXPERIENCE_COST_MULTIPLIER)
-        return experience_to_level
-
-    def get_stat_progress_percentage(self, stat_name):
-        return self.get_stat_experience(stat_name) * 100 / self.get_stat_experience_to_level(stat_name)
-
     def potential_multiplier(self):
         return POTENTIAL_MULTIPLIERS[self.potential]
 
-    def stat_level_gain(self):
-        return math.ceil((2 ** (self.rating - 1)) * self.potential_multiplier())
+    @property
+    def power(self):
+        return math.ceil(round(self.base_power + sum(self.power_multiplier_bonuses()), 10))
 
-    def add_stat_experience(self, stat_name, amount):
-        gained_experience = amount * self.stats["Adaptability"]
-        self.stat_experience[stat_name] += gained_experience
+    def power_multiplier_bonuses(self):
+        return [
+            self.base_power * (self.potential_multiplier() - 1),
+            self.base_power * (self.spirit_multiplier - 1),
+        ]
 
-        while self.stat_experience[stat_name] >= self.get_stat_experience_to_level(stat_name):
-            self.stat_experience[stat_name] -= self.get_stat_experience_to_level(stat_name)
-            self.stat_levels[stat_name] += 1
-            stat_gain = self.stat_level_gain()
-            if stat_name == "Adaptability":
-                self.stats[stat_name] = round(
-                    self.stats[stat_name] + (ADAPTABILITY_LEVEL_GAIN * stat_gain),
-                    1,
-                )
-            else:
-                self.stats[stat_name] += stat_gain
+    def get_power_experience(self):
+        return self.power_experience
+
+    def get_power_experience_to_level(self):
+        return self.power_experience_to_level(self.power_level)
+
+    @staticmethod
+    def power_experience_to_level(power_level):
+        experience_to_level = POWER_BASE_EXPERIENCE_TO_LEVEL
+        for _ in range(power_level):
+            experience_to_level = math.ceil(experience_to_level * POWER_EXPERIENCE_COST_MULTIPLIER)
+        return experience_to_level
+
+    def get_power_progress_percentage(self):
+        return self.power_experience * 100 / self.get_power_experience_to_level()
+
+    def add_power_experience(self, amount):
+        self.power_experience += amount
+
+        while self.power_experience >= self.get_power_experience_to_level():
+            self.power_experience -= self.get_power_experience_to_level()
+            self.power_level += 1
+            self.base_power += self.power_level_gain()
+
+    def power_level_gain(self):
+        return self.rating
+
+    def get_spirit_experience(self):
+        return self.spirit_experience
+
+    def get_spirit_experience_to_level(self):
+        return self.spirit_level
+
+    def get_spirit_progress_percentage(self):
+        return self.spirit_experience * 100 / self.get_spirit_experience_to_level()
+
+    def add_spirit_experience(self, amount):
+        self.spirit_experience += amount
+
+        while self.spirit_experience >= self.get_spirit_experience_to_level():
+            self.spirit_experience -= self.get_spirit_experience_to_level()
+            self.spirit_level += 1
+            self.spirit_multiplier = round(
+                self.spirit_multiplier + SPIRIT_MULTIPLIER_GAINS[self.spirit_type],
+                2,
+            )
 
     def copy(self, rating=None, potential=None):
         if rating is None:
@@ -122,27 +131,7 @@ class Mob:
         if potential is None:
             potential = self.potential
 
-        return Mob(
-            self.name,
-            self.mob_type,
-            self.scaled_spawn_stats(self.stats, rating, potential),
-            self.stat_experience.copy(),
-            rating,
-            potential,
-            self.stat_levels.copy(),
-        )
-
-    @staticmethod
-    def scaled_spawn_stats(stats, rating, potential):
-        potential_multiplier = POTENTIAL_MULTIPLIERS.get(potential, POTENTIAL_MULTIPLIERS["Normal"])
-        scaled_stats = {}
-        for stat_name, stat_value in stats.items():
-            scaled_value = stat_value * rating * potential_multiplier
-            if stat_name == "Adaptability":
-                scaled_stats[stat_name] = round(scaled_value, 1)
-            else:
-                scaled_stats[stat_name] = math.ceil(scaled_value)
-        return scaled_stats
+        return Mob(self.name, self.mob_type, rating, potential)
 
 
 class MobSystem:
@@ -163,8 +152,11 @@ class MobSystem:
             self.last_summoned_mob = None
         return mob
 
-    def add_stat_experience(self, mob_index, stat_name, amount=1):
-        self.get_owned_mob(mob_index).add_stat_experience(stat_name, amount)
+    def add_power_experience(self, mob_index, amount=1):
+        self.get_owned_mob(mob_index).add_power_experience(amount)
+
+    def add_spirit_experience(self, mob_index, amount=1):
+        self.get_owned_mob(mob_index).add_spirit_experience(amount)
 
     def random_potential(self):
         return random.choice(POTENTIAL_LEVELS)
@@ -181,111 +173,17 @@ class MobSystem:
     def get_last_summoned_mob(self):
         return self.last_summoned_mob
 
-    @staticmethod
-    def empty_stat_experience():
-        return {stat_name: 0 for stat_name in MOB_STATS}
-
-    @staticmethod
-    def balanced_stats():
-        return {
-            stat_name: 1.0 if stat_name == "Adaptability" else 5
-            for stat_name in MOB_STATS
-        }
-
     @classmethod
     def create_summon_pool(cls):
         return [
-            Mob(
-                "Canis Placeholderus",
-                "Canine",
-                {
-                    "Vitality": 5,
-                    "Ferocity": 10,
-                    "Agility": 5,
-                    "Intuition": 5,
-                    "Precision": 5,
-                    "Brutality": 10,
-                    "Resilience": 5,
-                    "Arcane": 0,
-                    "Warding": 0,
-                    "Adaptability": 1.0,
-                },
-                cls.empty_stat_experience(),
-            ),
-            Mob(
-                "Danger Noodle",
-                "Serpent",
-                {
-                    "Vitality": 4,
-                    "Ferocity": 5,
-                    "Agility": 5,
-                    "Intuition": 10,
-                    "Precision": 5,
-                    "Brutality": 5,
-                    "Resilience": 3,
-                    "Arcane": 4,
-                    "Warding": 4,
-                    "Adaptability": 1.0,
-                },
-                cls.empty_stat_experience(),
-            ),
-            Mob(
-                "Skitterblob",
-                "Arachnid",
-                {
-                    "Vitality": 2,
-                    "Ferocity": 3,
-                    "Agility": 7,
-                    "Intuition": 5,
-                    "Precision": 10,
-                    "Brutality": 5,
-                    "Resilience": 3,
-                    "Arcane": 5,
-                    "Warding": 5,
-                    "Adaptability": 1.0,
-                },
-                cls.empty_stat_experience(),
-            ),
-            Mob(
-                "Belt Buddy",
-                "Armadillo",
-                cls.balanced_stats(),
-                cls.empty_stat_experience(),
-            ),
-            Mob(
-                "Birb",
-                "Avian",
-                cls.balanced_stats(),
-                cls.empty_stat_experience(),
-            ),
-            Mob(
-                "Common Green Boy",
-                "Chameleon",
-                cls.balanced_stats(),
-                cls.empty_stat_experience(),
-            ),
-            Mob(
-                "Creepy Crawler",
-                "Insectoid",
-                cls.balanced_stats(),
-                cls.empty_stat_experience(),
-            ),
-            Mob(
-                "Fluffy Friend",
-                "Ursine",
-                cls.balanced_stats(),
-                cls.empty_stat_experience(),
-            ),
-            Mob(
-                "Professor Hoot",
-                "Owl",
-                cls.balanced_stats(),
-                cls.empty_stat_experience(),
-            ),
-            Mob(
-                "Shelly",
-                "Turtle",
-                cls.balanced_stats(),
-                cls.empty_stat_experience(),
-            ),
+            Mob("Canis Placeholderus", "Canine"),
+            Mob("Danger Noodle", "Serpent"),
+            Mob("Skitterblob", "Arachnid"),
+            Mob("Belt Buddy", "Armadillo"),
+            Mob("Birb", "Avian"),
+            Mob("Common Green Boy", "Chameleon"),
+            Mob("Creepy Crawler", "Insectoid"),
+            Mob("Fluffy Friend", "Ursine"),
+            Mob("Professor Hoot", "Owl"),
+            Mob("Shelly", "Turtle"),
         ]

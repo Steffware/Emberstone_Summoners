@@ -3,7 +3,7 @@ from EmberCoreSystem import EmberCoreSystem
 from EssenceSystem import EssenceSystem
 import ImageManager
 import ProgressBar
-from MobSystem import MOB_STATS, STAT_DESCRIPTIONS, Mob, MobSystem
+from MobSystem import POTENTIAL_LEVELS, SPIRIT_TYPES, Mob, MobSystem
 import pygame
 from config import RESOLUTION_OPTIONS
 from paths import FONTS
@@ -27,7 +27,9 @@ SACRIFICE_DROPDOWN_ROW_HEIGHT = 128
 MOB_SCROLLBAR_WIDTH = 12
 MOB_SCROLLBAR_MIN_THUMB_HEIGHT = 32
 MOB_SCROLL_WHEEL_PIXELS = 160
-STAT_PROGRESS_BAR_SIZE = (144, 24)
+POWER_PROGRESS_BAR_SIZE = (144, 24)
+MOB_INFO_BORDER_PADDING = round(7.5 * ImageManager.ASSET_SCALE)
+MOB_INFO_BODY_PADDING = round(MOB_INFO_BORDER_PADDING * 1.5)
 DEBUG_TOGGLE_BUTTON_SIZE = 48
 SACRIFICE_COOLDOWN_SECONDS = 60
 TEXT_COLOR = (20, 20, 20)
@@ -46,6 +48,12 @@ POTENTIAL_COLORS = {
     "Normal": (255, 255, 255),
     "Good": (95, 220, 105),
     "Exceptional": STAR_TEXT_COLOR,
+}
+SPIRIT_COLORS = {
+    "Mundane": POTENTIAL_COLORS["Poor"],
+    "Enchanted": POTENTIAL_COLORS["Normal"],
+    "Arcane": (45, 85, 170),
+    "Mystic": (205, 75, 255),
 }
 RESOLUTION_CONFIRM_SECONDS = 10
 GAME_MENU_BUTTON_LABELS = ["Emberstone", "Mobs", "Summon and Sacrifice", "Adventure"]
@@ -134,18 +142,24 @@ class GameState:
         self.debug_lifeforce_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_sacrifice_timer_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_spawn_button_rect = pygame.Rect(0, 0, 0, 0)
-        self.debug_stat_exp_button_rects = []
+        self.debug_power_exp_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spirit_exp_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_spawn_window_open = False
         self.debug_spawn_dropdown_open = False
         self.debug_spawn_selected_mob_index = 0
         self.debug_spawn_rating = 1
-        self.debug_spawn_stat_inputs = {}
-        self.debug_spawn_stat_rects = {}
-        self.debug_spawn_focused_stat = None
+        self.debug_spawn_potential_dropdown_open = False
+        self.debug_spawn_spirit_dropdown_open = False
+        self.debug_spawn_selected_potential = "Normal"
+        self.debug_spawn_selected_spirit = "Mundane"
         self.debug_spawn_dropdown_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_spawn_option_rects = []
         self.debug_spawn_rating_minus_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_spawn_rating_plus_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spawn_potential_dropdown_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spawn_potential_option_rects = []
+        self.debug_spawn_spirit_dropdown_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spawn_spirit_option_rects = []
         self.debug_spawn_confirm_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_spawn_close_button_rect = pygame.Rect(0, 0, 0, 0)
         self.essence_system = EssenceSystem()
@@ -153,7 +167,6 @@ class GameState:
         self.mob_system = MobSystem()
         self.infuse_level = 0
         self.font = pygame.font.Font(FONTS / "PixelOperator8.ttf", 16)
-        self.reset_debug_spawn_inputs()
 
     def set_debug_framerate(self, framerate):
         self.debug_framerate = framerate
@@ -427,11 +440,19 @@ class GameState:
                     self.open_debug_spawn_window()
                     return True
 
-                if self.active_game_window == GAME_WINDOW_MOBS:
-                    for stat_name, rect in self.debug_stat_exp_button_rects:
-                        if rect.collidepoint(position):
-                            self.add_selected_mob_stat_experience(stat_name)
-                            return True
+                if (
+                    self.active_game_window == GAME_WINDOW_MOBS
+                    and self.debug_power_exp_button_rect.collidepoint(position)
+                ):
+                    self.add_selected_mob_power_experience()
+                    return True
+
+                if (
+                    self.active_game_window == GAME_WINDOW_MOBS
+                    and self.debug_spirit_exp_button_rect.collidepoint(position)
+                ):
+                    self.add_selected_mob_spirit_experience()
+                    return True
 
         if self.settings_open:
             if self.settings_button_rect.collidepoint(position):
@@ -651,11 +672,17 @@ class GameState:
 
         return owned_mobs[self.selected_mob_index]
 
-    def add_selected_mob_stat_experience(self, stat_name):
+    def add_selected_mob_power_experience(self):
         if self.selected_mob() is None:
             return
 
-        self.mob_system.add_stat_experience(self.selected_mob_index, stat_name)
+        self.mob_system.add_power_experience(self.selected_mob_index)
+
+    def add_selected_mob_spirit_experience(self):
+        if self.selected_mob() is None:
+            return
+
+        self.mob_system.add_spirit_experience(self.selected_mob_index)
 
     def can_afford_summon(self):
         return self.essence_system.has_essence(self.summon_cost())
@@ -668,17 +695,6 @@ class GameState:
         self.selected_mob_index = len(self.mob_system.get_owned_mobs()) - 1
         return True
 
-    def reset_debug_spawn_inputs(self):
-        template = self.debug_spawn_selected_template()
-        if template is None:
-            self.debug_spawn_stat_inputs = {stat_name: "0" for stat_name in MOB_STATS}
-            return
-
-        self.debug_spawn_stat_inputs = {
-            stat_name: self.format_debug_spawn_value(template.stats[stat_name])
-            for stat_name in MOB_STATS
-        }
-
     def debug_spawn_selected_template(self):
         summon_pool = self.mob_system.summon_pool
         if not summon_pool:
@@ -689,73 +705,24 @@ class GameState:
 
         return summon_pool[self.debug_spawn_selected_mob_index]
 
-    def format_debug_spawn_value(self, value):
-        if isinstance(value, float) and not value.is_integer():
-            return str(value)
-        return str(int(value))
-
     def open_debug_spawn_window(self):
         self.debug_spawn_window_open = True
         self.debug_spawn_dropdown_open = False
-        self.debug_spawn_focused_stat = None
-        self.reset_debug_spawn_inputs()
+        self.debug_spawn_potential_dropdown_open = False
+        self.debug_spawn_spirit_dropdown_open = False
 
     def close_debug_spawn_window(self):
         self.debug_spawn_window_open = False
         self.debug_spawn_dropdown_open = False
-        self.debug_spawn_focused_stat = None
+        self.debug_spawn_potential_dropdown_open = False
+        self.debug_spawn_spirit_dropdown_open = False
 
     def handle_debug_spawn_keyboard_event(self, event):
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             self.close_debug_spawn_window()
             return True
 
-        if self.debug_spawn_focused_stat is None:
-            return event.type in (pygame.KEYDOWN, pygame.TEXTINPUT)
-
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_BACKSPACE:
-                self.debug_spawn_stat_inputs[self.debug_spawn_focused_stat] = (
-                    self.debug_spawn_stat_inputs[self.debug_spawn_focused_stat][:-1]
-                )
-                return True
-            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                self.debug_spawn_focused_stat = None
-                return True
-            if event.key == pygame.K_TAB:
-                self.focus_next_debug_spawn_stat()
-                return True
-
-            return True
-
-        if event.type == pygame.TEXTINPUT:
-            self.append_debug_spawn_input_character(event.text)
-            return True
-
         return False
-
-    def append_debug_spawn_input_character(self, character):
-        if self.debug_spawn_focused_stat is None:
-            return
-
-        current_value = self.debug_spawn_stat_inputs[self.debug_spawn_focused_stat]
-        for typed_character in character:
-            if typed_character.isdigit():
-                current_value += typed_character
-            elif typed_character == "." and "." not in current_value:
-                current_value += typed_character
-            elif typed_character == "-" and not current_value:
-                current_value += typed_character
-
-        self.debug_spawn_stat_inputs[self.debug_spawn_focused_stat] = current_value[:8]
-
-    def focus_next_debug_spawn_stat(self):
-        if self.debug_spawn_focused_stat not in MOB_STATS:
-            self.debug_spawn_focused_stat = MOB_STATS[0]
-            return
-
-        current_index = MOB_STATS.index(self.debug_spawn_focused_stat)
-        self.debug_spawn_focused_stat = MOB_STATS[(current_index + 1) % len(MOB_STATS)]
 
     def handle_debug_spawn_click(self, position):
         if self.debug_spawn_close_button_rect.collidepoint(position):
@@ -767,69 +734,76 @@ class GameState:
                 if rect.collidepoint(position):
                     self.debug_spawn_selected_mob_index = mob_index
                     self.debug_spawn_dropdown_open = False
-                    self.reset_debug_spawn_inputs()
                     return True
 
             if not self.debug_spawn_dropdown_rect.collidepoint(position):
                 self.debug_spawn_dropdown_open = False
                 return True
 
+        if self.debug_spawn_potential_dropdown_open:
+            for potential, rect in self.debug_spawn_potential_option_rects:
+                if rect.collidepoint(position):
+                    self.debug_spawn_selected_potential = potential
+                    self.debug_spawn_potential_dropdown_open = False
+                    return True
+
+            if not self.debug_spawn_potential_dropdown_rect.collidepoint(position):
+                self.debug_spawn_potential_dropdown_open = False
+                return True
+
+        if self.debug_spawn_spirit_dropdown_open:
+            for spirit_type, rect in self.debug_spawn_spirit_option_rects:
+                if rect.collidepoint(position):
+                    self.debug_spawn_selected_spirit = spirit_type
+                    self.debug_spawn_spirit_dropdown_open = False
+                    return True
+
+            if not self.debug_spawn_spirit_dropdown_rect.collidepoint(position):
+                self.debug_spawn_spirit_dropdown_open = False
+                return True
+
         if self.debug_spawn_dropdown_rect.collidepoint(position):
             self.debug_spawn_dropdown_open = not self.debug_spawn_dropdown_open
-            self.debug_spawn_focused_stat = None
+            self.debug_spawn_potential_dropdown_open = False
+            self.debug_spawn_spirit_dropdown_open = False
+            return True
+
+        if self.debug_spawn_potential_dropdown_rect.collidepoint(position):
+            self.debug_spawn_potential_dropdown_open = not self.debug_spawn_potential_dropdown_open
+            self.debug_spawn_dropdown_open = False
+            self.debug_spawn_spirit_dropdown_open = False
+            return True
+
+        if self.debug_spawn_spirit_dropdown_rect.collidepoint(position):
+            self.debug_spawn_spirit_dropdown_open = not self.debug_spawn_spirit_dropdown_open
+            self.debug_spawn_dropdown_open = False
+            self.debug_spawn_potential_dropdown_open = False
             return True
 
         if self.debug_spawn_rating_minus_rect.collidepoint(position):
             self.debug_spawn_rating = max(1, self.debug_spawn_rating - 1)
-            self.debug_spawn_focused_stat = None
             return True
 
         if self.debug_spawn_rating_plus_rect.collidepoint(position):
             self.debug_spawn_rating = min(10, self.debug_spawn_rating + 1)
-            self.debug_spawn_focused_stat = None
             return True
-
-        for stat_name, rect in self.debug_spawn_stat_rects.items():
-            if rect.collidepoint(position):
-                self.debug_spawn_focused_stat = stat_name
-                return True
 
         if self.debug_spawn_confirm_button_rect.collidepoint(position):
             return self.spawn_debug_mob()
 
-        self.debug_spawn_focused_stat = None
         return True
-
-    def debug_spawn_stat_value(self, stat_name):
-        text_value = self.debug_spawn_stat_inputs.get(stat_name, "0")
-        try:
-            value = float(text_value)
-        except ValueError:
-            value = 0
-
-        value = max(0.0, value)
-        if value.is_integer():
-            return int(value)
-        return round(value, 2)
 
     def spawn_debug_mob(self):
         template = self.debug_spawn_selected_template()
         if template is None:
             return False
 
-        potential = self.mob_system.random_potential()
-        stats = Mob.scaled_spawn_stats(
-            {stat_name: self.debug_spawn_stat_value(stat_name) for stat_name in MOB_STATS},
-            self.debug_spawn_rating,
-            potential,
-        )
         spawned_mob = Mob(
-            template.name,
-            template.mob_type,
-            stats,
-            self.mob_system.empty_stat_experience(),
-            self.debug_spawn_rating,
-            potential,
+            name=template.name,
+            mob_type=template.mob_type,
+            rating=self.debug_spawn_rating,
+            potential=self.debug_spawn_selected_potential,
+            spirit_type=self.debug_spawn_selected_spirit,
         )
         self.mob_system.add_owned_mob(spawned_mob)
         self.selected_mob_index = len(self.mob_system.get_owned_mobs()) - 1
@@ -848,10 +822,10 @@ class GameState:
         return owned_mobs[self.selected_sacrifice_mob_index]
 
     def mob_lifeforce_value(self, mob):
-        return math.sqrt(sum(mob.stats.values()))
+        return math.sqrt(mob.power)
 
     def mob_power_text(self, mob):
-        return "Power: " + self.essence_system.format_number(sum(mob.stats.values()))
+        return "Power: " + self.essence_system.format_number(mob.power)
 
     def draw_mob_power_line(self, mob, position, status_below=False):
         power_label = self.font.render(self.mob_power_text(mob), False, LIFEFORCE_TEXT_COLOR)
@@ -868,20 +842,63 @@ class GameState:
         status_label = self.font.render(status_text, False, SCHEDULED_SACRIFICE_COLOR)
         self.screen.blit(status_label, status_position)
 
-    def mob_stat_experience_text(self, mob, stat_name):
-        current_experience = self.essence_system.format_number(mob.get_stat_experience(stat_name))
-        next_level_experience = self.essence_system.format_number(mob.get_stat_experience_to_level(stat_name))
+    def mob_power_experience_text(self, mob):
+        current_experience = self.essence_system.format_number(mob.get_power_experience())
+        next_level_experience = self.essence_system.format_number(mob.get_power_experience_to_level())
+        return current_experience + "/" + next_level_experience
+
+    def mob_spirit_experience_text(self, mob):
+        current_experience = self.essence_system.format_number(mob.get_spirit_experience())
+        next_level_experience = self.essence_system.format_number(mob.get_spirit_experience_to_level())
         return current_experience + "/" + next_level_experience
 
     def mob_potential_color(self, mob):
         return POTENTIAL_COLORS.get(mob.potential, POTENTIAL_COLORS["Normal"])
 
-    def draw_mob_type_potential(self, mob, position):
-        prefix = mob.mob_type + " - "
+    def mob_potential_color_name(self, potential):
+        return POTENTIAL_COLORS.get(potential, POTENTIAL_COLORS["Normal"])
+
+    def mob_spirit_color(self, mob):
+        return self.mob_spirit_color_name(mob.spirit_type)
+
+    def mob_spirit_color_name(self, spirit_type):
+        return SPIRIT_COLORS.get(spirit_type, SPIRIT_COLORS["Mundane"])
+
+    def mob_potential_text(self, mob):
+        return mob.potential + "(" + self.multiplier_text(mob.potential_multiplier()) + ")"
+
+    def mob_spirit_text(self, mob):
+        return "Spirit: " + mob.spirit_type + "(" + self.multiplier_text(mob.spirit_multiplier) + ")"
+
+    def multiplier_text(self, multiplier):
+        if float(multiplier).is_integer():
+            return str(int(multiplier))
+        return str(multiplier)
+
+    def draw_mob_type(self, mob, position):
+        self._draw_label(mob.mob_type, position, RATE_TEXT_COLOR)
+
+    def draw_mob_potential_line(self, mob, position):
+        prefix = "Potential: "
         prefix_label = self.font.render(prefix, False, RATE_TEXT_COLOR)
         self.screen.blit(prefix_label, position)
-        potential_label = self.font.render(mob.potential, False, self.mob_potential_color(mob))
+        potential_label = self.font.render(
+            self.mob_potential_text(mob),
+            False,
+            self.mob_potential_color(mob),
+        )
         self.screen.blit(potential_label, (position[0] + prefix_label.get_width(), position[1]))
+
+    def draw_mob_spirit_line(self, mob, position):
+        prefix = "Spirit: "
+        prefix_label = self.font.render(prefix, False, RATE_TEXT_COLOR)
+        self.screen.blit(prefix_label, position)
+        spirit_label = self.font.render(
+            mob.spirit_type + "(" + self.multiplier_text(mob.spirit_multiplier) + ")",
+            False,
+            self.mob_spirit_color(mob),
+        )
+        self.screen.blit(spirit_label, (position[0] + prefix_label.get_width(), position[1]))
 
     def can_sacrifice_selected_mob(self):
         return self.selected_sacrifice_mob() is not None and self.sacrifice_cooldown_seconds <= 0
@@ -1247,6 +1264,7 @@ class GameState:
 
     def draw_summon_window(self, window_rect):
         content_rect = window_rect.inflate(-ImageManager.TILE_SIZE * 2, -ImageManager.TILE_SIZE * 2)
+        mob_info_rect = self.mob_info_content_rect(window_rect)
         x = content_rect.left
         y = content_rect.top
 
@@ -1270,7 +1288,7 @@ class GameState:
             self.summon_button_rect.bottom + CONTROL_GAP,
         )
         preview_top = rating_bottom + CONTROL_GAP
-        self.draw_last_summoned_mob_preview(content_rect, preview_top)
+        self.draw_last_summoned_mob_preview(mob_info_rect, preview_top)
 
     def draw_summon_rating_controls(self, left, top):
         button_size = self._button_size("+")
@@ -1313,39 +1331,20 @@ class GameState:
             SUMMON_PREVIEW_CELL_SIZE,
             SUMMON_PREVIEW_CELL_SIZE,
         )
-        self.draw_mob_cell_border(preview_cell)
         self.last_summoned_preview_rect = pygame.Rect(0, 0, 0, 0)
 
         mob = self.mob_system.get_last_summoned_mob()
         if mob is None:
+            self.draw_mob_cell_border(preview_cell)
             self._draw_label("No summon yet", (preview_cell.right + 12, preview_cell.top), RATE_TEXT_COLOR)
             return
 
         self.last_summoned_preview_rect = preview_cell
-        sprite = self.image_manager.get_mob(mob.sprite_key)
-        sprite_rect = sprite.get_rect(center=preview_cell.center)
-        self.screen.blit(sprite, sprite_rect)
-
-        title_x = preview_cell.right + 12
-        self._draw_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
-        self._draw_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
-        self.draw_mob_type_potential(mob, (title_x, preview_cell.top + 40))
-        self.draw_mob_power_line(mob, (title_x, preview_cell.top + 60), True)
-
-        stats_top = preview_cell.bottom + ImageManager.TILE_SIZE
-        column_width = content_rect.width // 2
-        line_height = 18
-        for index, stat_name in enumerate(MOB_STATS):
-            column = index % 2
-            row = index // 2
-            stat_pos = (
-                content_rect.left + (column * column_width),
-                stats_top + (row * line_height),
-            )
-            self._draw_label(stat_name + ": " + str(mob.stats[stat_name]), stat_pos, ESSENCE_TEXT_COLOR)
+        self.draw_mob_detail_block(mob, preview_cell, content_rect.left, content_rect.right)
 
     def draw_sacrifice_window(self, window_rect):
         content_rect = window_rect.inflate(-ImageManager.TILE_SIZE * 2, -ImageManager.TILE_SIZE * 2)
+        mob_info_rect = self.mob_info_content_rect(window_rect)
         self.sacrifice_button_rect = pygame.Rect(0, 0, 0, 0)
         self.sacrifice_queue_button_rect = pygame.Rect(0, 0, 0, 0)
         self.auto_sacrifice_checkbox_rect = pygame.Rect(0, 0, 0, 0)
@@ -1368,8 +1367,8 @@ class GameState:
             return
 
         preview_top = self.sacrifice_dropdown_rect.bottom + ImageManager.TILE_SIZE
-        stats_bottom = self.draw_compact_mob_info(content_rect, selected_mob, preview_top)
-        button_top = stats_bottom + ImageManager.TILE_SIZE
+        preview_bottom = self.draw_compact_mob_info(mob_info_rect, selected_mob, preview_top)
+        button_top = preview_bottom + ImageManager.TILE_SIZE
         button_text = self.font.render("Sacrifice", False, TEXT_COLOR)
         button_size = self._button_size("Sacrifice", button_text)
         self.sacrifice_button_rect = pygame.Rect((content_rect.left, button_top), button_size)
@@ -1549,7 +1548,7 @@ class GameState:
             text_x = sprite_rect.right + 12
             self._draw_label(selected_mob.name, (text_x, self.sacrifice_dropdown_rect.top + 8), ESSENCE_TEXT_COLOR)
             self._draw_label(self.summon_rating_text(selected_mob.rating), (text_x, self.sacrifice_dropdown_rect.top + 28), STAR_TEXT_COLOR)
-            self.draw_mob_type_potential(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 48))
+            self.draw_mob_type(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 48))
             self.draw_mob_power_line(selected_mob, (text_x, self.sacrifice_dropdown_rect.top + 68), True)
             self.draw_scheduled_sacrifice_marker(selected_mob, self.sacrifice_dropdown_rect)
 
@@ -1621,7 +1620,7 @@ class GameState:
             text_x = sprite_rect.right + 12
             self._draw_label(mob.name, (text_x, option_rect.top + 8), ESSENCE_TEXT_COLOR)
             self._draw_label(self.summon_rating_text(mob.rating), (text_x, option_rect.top + 28), STAR_TEXT_COLOR)
-            self.draw_mob_type_potential(mob, (text_x, option_rect.top + 48))
+            self.draw_mob_type(mob, (text_x, option_rect.top + 48))
             self.draw_mob_power_line(mob, (text_x, option_rect.top + 68), True)
             self.draw_scheduled_sacrifice_marker(mob, option_rect)
             self.sacrifice_option_rects.append((mob_index, option_rect))
@@ -1665,9 +1664,16 @@ class GameState:
         pygame.draw.rect(self.screen, SCHEDULED_SACRIFICE_COLOR, rect.inflate(-2, -2), 2)
 
     def draw_compact_mob_info(self, content_rect, mob, top):
-        preview_cell = pygame.Rect(
+        header_rect = pygame.Rect(
             content_rect.left,
             top,
+            content_rect.width,
+            SUMMON_PREVIEW_CELL_SIZE + (MOB_INFO_BORDER_PADDING * 2),
+        )
+        self.draw_mob_info_border(header_rect)
+        preview_cell = pygame.Rect(
+            header_rect.left + MOB_INFO_BORDER_PADDING,
+            header_rect.top + MOB_INFO_BORDER_PADDING,
             SUMMON_PREVIEW_CELL_SIZE,
             SUMMON_PREVIEW_CELL_SIZE,
         )
@@ -1677,25 +1683,13 @@ class GameState:
         sprite_rect = sprite.get_rect(center=preview_cell.center)
         self.screen.blit(sprite, sprite_rect)
 
-        title_x = preview_cell.right + 12
+        title_x = preview_cell.right + MOB_INFO_BORDER_PADDING
         self._draw_label(mob.name, (title_x, preview_cell.top), ESSENCE_TEXT_COLOR)
         self._draw_label(self.summon_rating_text(mob.rating), (title_x, preview_cell.top + 20), STAR_TEXT_COLOR)
-        self.draw_mob_type_potential(mob, (title_x, preview_cell.top + 40))
+        self.draw_mob_type(mob, (title_x, preview_cell.top + 40))
         self.draw_mob_power_line(mob, (title_x, preview_cell.top + 60), True)
 
-        stats_top = preview_cell.bottom + ImageManager.TILE_SIZE
-        column_width = content_rect.width // 2
-        line_height = 18
-        for index, stat_name in enumerate(MOB_STATS):
-            column = index % 2
-            row = index // 2
-            stat_pos = (
-                content_rect.left + (column * column_width),
-                stats_top + (row * line_height),
-            )
-            self._draw_label(stat_name + ": " + str(mob.stats[stat_name]), stat_pos, ESSENCE_TEXT_COLOR)
-
-        return stats_top + (math.ceil(len(MOB_STATS) / 2) * line_height)
+        return header_rect.bottom
 
     def draw_mob_pool(self, window_rect):
         content_rect = window_rect.inflate(-ImageManager.TILE_SIZE * 2, -ImageManager.TILE_SIZE * 2)
@@ -1819,54 +1813,117 @@ class GameState:
         if mob is None:
             return
 
-        content_rect = window_rect.inflate(-ImageManager.TILE_SIZE * 2, -ImageManager.TILE_SIZE * 2)
+        content_rect = self.mob_info_content_rect(window_rect)
         x = content_rect.left
         y = content_rect.top
-        line_gap = 3
-
         sprite_cell = pygame.Rect(x, y, MOB_SPRITE_SIZE, MOB_SPRITE_SIZE)
-        self.draw_mob_cell_border(sprite_cell, sacrifice=self.is_mob_queued_for_sacrifice(mob))
+        self.draw_mob_detail_block(mob, sprite_cell, x, content_rect.right)
+
+    def mob_info_content_rect(self, window_rect):
+        return window_rect.inflate(-ImageManager.TILE_SIZE, -ImageManager.TILE_SIZE)
+
+    def draw_mob_detail_block(self, mob, sprite_cell, details_x, right):
+        line_height = self.font.get_height()
+        line_step = round(line_height * 1.5)
+        header_top = sprite_cell.top
+        content_sprite_cell = sprite_cell.move(MOB_INFO_BORDER_PADDING, MOB_INFO_BORDER_PADDING)
+        y = content_sprite_cell.top
+        power_y = y + (line_step * 3)
+        power_progress_top = power_y + line_height
+
+        header_content_bottom = max(content_sprite_cell.bottom, power_progress_top + POWER_PROGRESS_BAR_SIZE[1])
+        if self.is_mob_queued_for_sacrifice(mob):
+            header_content_bottom += 4 + line_height
+        header_bottom = header_content_bottom + MOB_INFO_BORDER_PADDING
+
+        header_rect = pygame.Rect(
+            sprite_cell.left,
+            header_top,
+            right - sprite_cell.left,
+            header_bottom - header_top,
+        )
+        self.draw_mob_info_border(header_rect)
+
+        self.draw_mob_cell_border(content_sprite_cell, sacrifice=self.is_mob_queued_for_sacrifice(mob))
         sprite = self.image_manager.get_mob(mob.sprite_key)
-        sprite_rect = sprite.get_rect(center=sprite_cell.center)
+        sprite_rect = sprite.get_rect(center=content_sprite_cell.center)
         self.screen.blit(sprite, sprite_rect)
 
-        title_x = x + MOB_SPRITE_SIZE + 12
+        title_x = content_sprite_cell.right + MOB_INFO_BORDER_PADDING
         self._draw_label(mob.name, (title_x, y), ESSENCE_TEXT_COLOR)
-        self._draw_label(self.summon_rating_text(mob.rating), (title_x, y + 18), STAR_TEXT_COLOR)
-        self.draw_mob_type_potential(mob, (title_x, y + 36))
-        self._draw_label(self.mob_power_text(mob), (title_x, y + 54), LIFEFORCE_TEXT_COLOR)
+        self._draw_label(self.summon_rating_text(mob.rating), (title_x, y + line_step), STAR_TEXT_COLOR)
+        self.draw_mob_type(mob, (title_x, y + (line_step * 2)))
+        self._draw_label(self.mob_power_text(mob), (title_x, power_y), LIFEFORCE_TEXT_COLOR)
+
+        progress_rect = self.draw_mob_detail_progress_bar(
+            title_x,
+            power_progress_top,
+            mob.get_power_progress_percentage(),
+            self.mob_power_experience_text(mob),
+        )
         if self.is_mob_queued_for_sacrifice(mob):
-            self._draw_label("Being Sacrificed...", (title_x, y + 72), SCHEDULED_SACRIFICE_COLOR)
-        y += MOB_SPRITE_SIZE + 8
+            sacrifice_status_position = (title_x, progress_rect.bottom + 4)
+            self._draw_label("Being Sacrificed...", sacrifice_status_position, SCHEDULED_SACRIFICE_COLOR)
 
-        for stat_name in MOB_STATS:
-            value = mob.stats[stat_name]
-            description = STAT_DESCRIPTIONS[stat_name]
-            stat_text = stat_name + ": " + str(value)
-            description_text = description
+        y = header_bottom + line_height
+        spirit_y = y + (line_height * 2)
+        spirit_progress_top = spirit_y + line_height
+        body_bottom = spirit_progress_top + POWER_PROGRESS_BAR_SIZE[1]
+        body_rect = pygame.Rect(
+            details_x,
+            y - MOB_INFO_BODY_PADDING,
+            right - details_x,
+            body_bottom - y + (MOB_INFO_BODY_PADDING * 2),
+        )
+        self.draw_mob_info_border(body_rect)
 
-            self._draw_label(stat_text, (x, y), ESSENCE_TEXT_COLOR)
-            y += 18
-            self._draw_label(description_text, (x + 12, y), RATE_TEXT_COLOR)
-            y += 17
+        body_content_x = details_x + MOB_INFO_BODY_PADDING
+        y = body_rect.top + MOB_INFO_BODY_PADDING
+        spirit_y = y + (line_height * 2)
+        spirit_progress_top = spirit_y + line_height
 
-            progress_rect = pygame.Rect(x, y, STAT_PROGRESS_BAR_SIZE[0], STAT_PROGRESS_BAR_SIZE[1])
-            ProgressBar.draw_progress_bar(
-                self.screen,
-                self.image_manager,
-                progress_rect,
-                mob.get_stat_progress_percentage(stat_name),
-            )
-            experience_text = self.font.render(
-                self.mob_stat_experience_text(mob, stat_name),
-                False,
-                ESSENCE_TEXT_COLOR,
-            )
-            experience_rect = experience_text.get_rect(
-                midleft=(progress_rect.right + 8, progress_rect.centery)
-            )
-            self.screen.blit(experience_text, experience_rect)
-            y += STAT_PROGRESS_BAR_SIZE[1] + line_gap
+        self.draw_mob_potential_line(mob, (body_content_x, y))
+        self.draw_mob_spirit_line(mob, (body_content_x, spirit_y))
+
+        self.draw_mob_detail_progress_bar(
+            body_content_x,
+            spirit_progress_top,
+            mob.get_spirit_progress_percentage(),
+            self.mob_spirit_experience_text(mob),
+        )
+
+    def draw_mob_info_border(self, rect):
+        self._draw_border(self.image_manager.get_border("mob_info_border_png").get_tiles(), rect)
+
+    def draw_mob_detail_progress_bar(self, left, top, percentage, experience_text):
+        indent_label = self.font.render("┗", False, RATE_TEXT_COLOR)
+        indent_rect = indent_label.get_rect(
+            midleft=(left, top + (POWER_PROGRESS_BAR_SIZE[1] // 2))
+        )
+        self.screen.blit(indent_label, indent_rect)
+
+        progress_rect = pygame.Rect(
+            indent_rect.right + 6,
+            top,
+            POWER_PROGRESS_BAR_SIZE[0],
+            POWER_PROGRESS_BAR_SIZE[1],
+        )
+        ProgressBar.draw_progress_bar(
+            self.screen,
+            self.image_manager,
+            progress_rect,
+            percentage,
+        )
+        rendered_experience_text = self.font.render(
+            experience_text,
+            False,
+            ESSENCE_TEXT_COLOR,
+        )
+        experience_rect = rendered_experience_text.get_rect(
+            midleft=(progress_rect.right + 8, progress_rect.centery)
+        )
+        self.screen.blit(rendered_experience_text, experience_rect)
+        return progress_rect
 
     def _draw_label(self, text, position, color):
         label = self.font.render(text, False, color)
@@ -1883,7 +1940,7 @@ class GameState:
         self.draw_ember_core_controls(window_rect)
 
     def draw_emberstone_lifeforce(self, emberstone_rect):
-        progress_rect = pygame.Rect(0, 0, STAT_PROGRESS_BAR_SIZE[0], STAT_PROGRESS_BAR_SIZE[1])
+        progress_rect = pygame.Rect(0, 0, POWER_PROGRESS_BAR_SIZE[0], POWER_PROGRESS_BAR_SIZE[1])
         progress_rect.midbottom = (emberstone_rect.centerx, emberstone_rect.top - 12)
 
         lifeforce_text = (
@@ -2084,7 +2141,7 @@ class GameState:
 
     def debug_spawn_window_rect(self):
         width, height = self.screen.get_size()
-        window_rect = pygame.Rect(0, 0, 780, 620)
+        window_rect = pygame.Rect(0, 0, 780, 360)
         window_rect.center = (width // 2, height // 2)
         return window_rect
 
@@ -2108,6 +2165,8 @@ class GameState:
         y = content_rect.top + 42
         self.draw_debug_spawn_dropdown(content_rect.left, y, 360)
         self.draw_debug_spawn_rating_controls(content_rect.left + 390, y)
+        self.draw_debug_spawn_potential_dropdown(content_rect.left, y + 76, 240)
+        self.draw_debug_spawn_spirit_dropdown(content_rect.left + 270, y + 76, 220)
 
         template = self.debug_spawn_selected_template()
         if template is not None:
@@ -2115,8 +2174,6 @@ class GameState:
             sprite_rect = sprite.get_rect(topright=(content_rect.right, y))
             self.screen.blit(sprite, sprite_rect)
 
-        stats_top = y + 74
-        self.draw_debug_spawn_stat_inputs(content_rect, stats_top)
         self.debug_spawn_confirm_button_rect = self._draw_button(
             "Spawn",
             (content_rect.left, content_rect.bottom - MENU_BUTTON_HEIGHT - 8),
@@ -2124,6 +2181,10 @@ class GameState:
 
         if self.debug_spawn_dropdown_open:
             self.draw_debug_spawn_dropdown_options()
+        elif self.debug_spawn_potential_dropdown_open:
+            self.draw_debug_spawn_potential_dropdown_options()
+        elif self.debug_spawn_spirit_dropdown_open:
+            self.draw_debug_spawn_spirit_dropdown_options()
 
     def draw_debug_spawn_dropdown(self, left, top, width):
         self.debug_spawn_dropdown_rect = pygame.Rect(left, top, width, DROPDOWN_HEIGHT)
@@ -2142,6 +2203,31 @@ class GameState:
         ]
         pygame.draw.polygon(self.screen, TEXT_COLOR, arrow_points)
 
+    def draw_debug_spawn_potential_dropdown(self, left, top, width):
+        self.debug_spawn_potential_dropdown_rect = pygame.Rect(left, top, width, DROPDOWN_HEIGHT)
+        self.draw_debug_spawn_labeled_dropdown(
+            self.debug_spawn_potential_dropdown_rect,
+            "Potential: " + self.debug_spawn_selected_potential,
+        )
+
+    def draw_debug_spawn_spirit_dropdown(self, left, top, width):
+        self.debug_spawn_spirit_dropdown_rect = pygame.Rect(left, top, width, DROPDOWN_HEIGHT)
+        self.draw_debug_spawn_labeled_dropdown(
+            self.debug_spawn_spirit_dropdown_rect,
+            "Spirit: " + self.debug_spawn_selected_spirit,
+        )
+
+    def draw_debug_spawn_labeled_dropdown(self, rect, label):
+        self._draw_box(rect, (180, 180, 180), TEXT_COLOR)
+        self._draw_dropdown_text(label, rect, TEXT_COLOR)
+
+        arrow_points = [
+            (rect.right - 22, rect.centery - 4),
+            (rect.right - 10, rect.centery - 4),
+            (rect.right - 16, rect.centery + 5),
+        ]
+        pygame.draw.polygon(self.screen, TEXT_COLOR, arrow_points)
+
     def draw_debug_spawn_dropdown_options(self):
         self.debug_spawn_option_rects = []
         option_height = DROPDOWN_HEIGHT
@@ -2156,6 +2242,36 @@ class GameState:
             self._draw_box(option_rect, fill_color, TEXT_COLOR)
             self._draw_dropdown_text(mob.name + " (" + mob.mob_type + ")", option_rect, TEXT_COLOR)
             self.debug_spawn_option_rects.append((mob_index, option_rect))
+
+    def draw_debug_spawn_potential_dropdown_options(self):
+        self.debug_spawn_potential_option_rects = []
+        option_height = DROPDOWN_HEIGHT
+        for index, potential in enumerate(POTENTIAL_LEVELS):
+            option_rect = pygame.Rect(
+                self.debug_spawn_potential_dropdown_rect.left,
+                self.debug_spawn_potential_dropdown_rect.bottom + (index * option_height),
+                self.debug_spawn_potential_dropdown_rect.width,
+                option_height,
+            )
+            fill_color = (205, 205, 205) if potential == self.debug_spawn_selected_potential else (190, 190, 190)
+            self._draw_box(option_rect, fill_color, TEXT_COLOR)
+            self._draw_dropdown_text(potential, option_rect, self.mob_potential_color_name(potential))
+            self.debug_spawn_potential_option_rects.append((potential, option_rect))
+
+    def draw_debug_spawn_spirit_dropdown_options(self):
+        self.debug_spawn_spirit_option_rects = []
+        option_height = DROPDOWN_HEIGHT
+        for index, spirit_type in enumerate(SPIRIT_TYPES):
+            option_rect = pygame.Rect(
+                self.debug_spawn_spirit_dropdown_rect.left,
+                self.debug_spawn_spirit_dropdown_rect.bottom + (index * option_height),
+                self.debug_spawn_spirit_dropdown_rect.width,
+                option_height,
+            )
+            fill_color = (205, 205, 205) if spirit_type == self.debug_spawn_selected_spirit else (190, 190, 190)
+            self._draw_box(option_rect, fill_color, TEXT_COLOR)
+            self._draw_dropdown_text(spirit_type, option_rect, self.mob_spirit_color_name(spirit_type))
+            self.debug_spawn_spirit_option_rects.append((spirit_type, option_rect))
 
     def draw_debug_spawn_rating_controls(self, left, top):
         label = self.font.render("Stars:", False, TEXT_COLOR)
@@ -2175,33 +2291,13 @@ class GameState:
         stars = self.font.render(self.summon_rating_text(self.debug_spawn_rating), False, STAR_TEXT_COLOR)
         self.screen.blit(stars, (self.debug_spawn_rating_plus_rect.right + 12, top + 5))
 
-    def draw_debug_spawn_stat_inputs(self, content_rect, top):
-        self.debug_spawn_stat_rects = {}
-        label_width = 132
-        input_width = 96
-        input_height = 28
-        line_height = 42
-        column_width = content_rect.width // 2
-
-        for index, stat_name in enumerate(MOB_STATS):
-            column = index % 2
-            row = index // 2
-            x = content_rect.left + (column * column_width)
-            y = top + (row * line_height)
-
-            self._draw_label(stat_name, (x, y + 6), TEXT_COLOR)
-            input_rect = pygame.Rect(x + label_width, y, input_width, input_height)
-            fill_color = (215, 215, 215) if self.debug_spawn_focused_stat == stat_name else (190, 190, 190)
-            self._draw_box(input_rect, fill_color, TEXT_COLOR)
-            self._draw_text(self.debug_spawn_stat_inputs.get(stat_name, "0"), input_rect, TEXT_COLOR)
-            self.debug_spawn_stat_rects[stat_name] = input_rect
-
     def draw_debug_overlay(self):
         self.debug_ember_core_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_lifeforce_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_sacrifice_timer_button_rect = pygame.Rect(0, 0, 0, 0)
         self.debug_spawn_button_rect = pygame.Rect(0, 0, 0, 0)
-        self.debug_stat_exp_button_rects = []
+        self.debug_power_exp_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.debug_spirit_exp_button_rect = pygame.Rect(0, 0, 0, 0)
 
         if self.debug_overlay_minimized:
             self.draw_minimized_debug_overlay()
@@ -2227,6 +2323,11 @@ class GameState:
                 "Reset Sac",
                 "Spawn",
             ]
+        elif self.active_game_window == GAME_WINDOW_MOBS and self.selected_mob() is not None:
+            debug_button_labels = [
+                "Power Exp +",
+                "Spirit Exp +",
+            ]
 
         debug_button_sizes = [self._button_size(label) for label in debug_button_labels]
         debug_button_width = max((size[0] for size in debug_button_sizes), default=0)
@@ -2238,23 +2339,6 @@ class GameState:
                 + (len(debug_button_labels) - 1) * CONTROL_GAP
             )
 
-        stat_button_labels = []
-        if self.active_game_window == GAME_WINDOW_MOBS and self.selected_mob() is not None:
-            stat_button_labels = [(stat_name, stat_name[:2] + "+") for stat_name in MOB_STATS]
-
-        stat_button_sizes = [self._button_size(label) for _, label in stat_button_labels]
-        stat_columns = 5
-        stat_button_gap = 4
-        stat_button_rows = math.ceil(len(stat_button_labels) / stat_columns) if stat_button_labels else 0
-        stat_button_width = max((size[0] for size in stat_button_sizes), default=0)
-        stat_button_height = max((size[1] for size in stat_button_sizes), default=0)
-        stat_buttons_width = 0
-        stat_buttons_height = 0
-        if stat_button_labels:
-            visible_columns = min(stat_columns, len(stat_button_labels))
-            stat_buttons_width = (visible_columns * stat_button_width) + ((visible_columns - 1) * stat_button_gap)
-            stat_buttons_height = (stat_button_rows * stat_button_height) + ((stat_button_rows - 1) * stat_button_gap)
-
         padding = 6
         line_gap = 2
         text_width = max(line.get_width() for line in rendered_lines)
@@ -2262,14 +2346,11 @@ class GameState:
         overlay_width = max(
             text_width + DEBUG_TOGGLE_BUTTON_SIZE + padding,
             debug_button_width,
-            stat_buttons_width,
             DEBUG_TOGGLE_BUTTON_SIZE,
         ) + (padding * 2)
         overlay_height = text_height + (padding * 2)
         if debug_button_labels:
             overlay_height += debug_buttons_height + padding
-        if stat_button_labels:
-            overlay_height += stat_buttons_height + padding
         overlay = pygame.Surface((overlay_width, overlay_height), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 180))
 
@@ -2306,23 +2387,11 @@ class GameState:
                     self.debug_sacrifice_timer_button_rect = button_rect
                 elif self.active_game_window == GAME_WINDOW_SUMMON_AND_SACRIFICE and index == 1:
                     self.debug_spawn_button_rect = button_rect
+                elif self.active_game_window == GAME_WINDOW_MOBS and index == 0:
+                    self.debug_power_exp_button_rect = button_rect
+                elif self.active_game_window == GAME_WINDOW_MOBS and index == 1:
+                    self.debug_spirit_exp_button_rect = button_rect
                 y += debug_button_height + CONTROL_GAP
-
-        if not stat_button_labels:
-            return
-
-        y += padding
-        for index, (stat_name, label) in enumerate(stat_button_labels):
-            column = index % stat_columns
-            row = index // stat_columns
-            button_rect = pygame.Rect(
-                overlay_pos[0] + padding + (column * (stat_button_width + stat_button_gap)),
-                overlay_pos[1] + y + (row * (stat_button_height + stat_button_gap)),
-                stat_button_width,
-                stat_button_height,
-            )
-            self._draw_button_in_rect(label, button_rect)
-            self.debug_stat_exp_button_rects.append((stat_name, button_rect))
 
     def draw_minimized_debug_overlay(self):
         self.debug_overlay_toggle_rect = pygame.Rect(

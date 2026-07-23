@@ -22,6 +22,7 @@ raw_border_pngs = [
     ("mob_cell_png", load_scaled(BORDERS / "mob_cell.png")),
     ("mob_cell_highlited_png", load_scaled(BORDERS / "mob_cell_highlited.png")),
     ("mob_cell_sacrifice_png", load_scaled(BORDERS / "mob_cell_sacrifice.png")),
+    ("mob_info_border_png", load_scaled(BORDERS / "mob_info_border.png")),
 ]
 raw_button_pngs = [
     ("base_button_png", load_scaled(BUTTONS / "base_button.png")),

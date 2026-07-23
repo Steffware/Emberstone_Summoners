@@ -11,6 +11,7 @@ __pycache__/
 # Agent/runtime mount points
 .agents/
 .codex/
+codex_session.txt
 
 # Alternate Git metadata directory used while .git is a read-only mount
 .git-real/
